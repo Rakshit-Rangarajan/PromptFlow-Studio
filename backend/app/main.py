@@ -82,31 +82,47 @@ async def execute_stream(request: ExecutionRequest):
 
 @app.post("/llm/complete")
 async def complete(request: CompletionRequest) -> dict[str, str]:
-    provider = get_provider(request.provider, request.runtime)
-    content = await provider.complete(request)
+    try:
+        provider = get_provider(request.provider, request.runtime)
+        if hasattr(provider, "_ensure_key"):
+            provider._ensure_key()
+        content = await provider.complete(request)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"content": content}
 
 
 @app.post("/llm/stream")
 async def stream_llm(request: CompletionRequest):
-    provider = get_provider(request.provider, request.runtime)
+    try:
+        provider = get_provider(request.provider, request.runtime)
+        if hasattr(provider, "_ensure_key"):
+            provider._ensure_key()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     async def events():
-        async for chunk in provider.stream(request):
-            yield f"data: {chunk}\n\n"
+        try:
+            async for chunk in provider.stream(request):
+                yield f"data: {chunk}\n\n"
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return StreamingResponse(events(), media_type="text/event-stream")
 
 
 @app.post("/vector/search")
 async def search_vectors(request: VectorSearchRequest):
-    embedding = await embed_text(request.query, request.provider, request.model, request.runtime)
-    vector_config = request.runtime.vectorDatabase.model_copy(update={
-        "collection": request.collection,
-        "index": request.index,
-        "path": request.path,
-    })
-    return await search_vector_database(vector_config, embedding, request.limit)
+    try:
+        embedding = await embed_text(request.query, request.provider, request.model, request.runtime)
+        vector_config = request.runtime.vectorDatabase.model_copy(update={
+            "collection": request.collection,
+            "index": request.index,
+            "path": request.path,
+        })
+        return await search_vector_database(vector_config, embedding, request.limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/compile", response_class=PlainTextResponse)
@@ -123,29 +139,21 @@ async def list_runtime_models(request: dict[str, Any]) -> dict[str, Any]:
     base_url = request.get("baseUrl") or ""
     api_key = request.get("apiKey") or ""
     mode = request.get("mode", "completion")
-    
-    if mode == "embedding":
-        fallbacks = {
-            "openai": ["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"],
-            "gemini": ["text-embedding-004"],
-            "nvidia": ["nvidia/embeddings-nv-embed-qa-4", "meta/llama3-8b-instruct"],
-            "openrouter": ["mistralai/mxtral-embed", "nomic/nomic-embed-text-v1.5"],
-            "ollama": ["nomic-embed-text", "all-minilm"],
-            "lmstudio": ["embedding-model-1"]
-        }
-    else:
-        fallbacks = {
-            "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-            "gemini": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"],
-            "nvidia": ["meta/llama3-70b-instruct", "meta/llama3-8b-instruct", "nvidia/llama-3.1-nemotron-51b-instruct"],
-            "openrouter": ["meta-llama/llama-3-8b-instruct:free", "mistralai/mistral-7b-instruct", "google/gemma-2-9b-it:free"],
-            "ollama": ["llama3", "mistral", "gemma", "phi3"],
-            "lmstudio": ["model-identifier-1", "model-identifier-2"]
-        }
-    
+
     models = []
+    source = "none"
     
     try:
+        if provider in {"mongodb", "mongo", "mongodb_atlas"} and mode == "embedding":
+            models = ["mongodb-embedding"]
+            recommendation = "mongodb-embedding"
+            source = "local"
+            return {
+                "models": models,
+                "recommendation": recommendation,
+                "source": source
+            }
+
         if provider == "gemini" and api_key:
             import httpx
             url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
@@ -157,6 +165,7 @@ async def list_runtime_models(request: dict[str, Any]) -> dict[str, Any]:
                         models = [m["name"].split("/")[-1] for m in data.get("models", []) if "embedContent" in m.get("supportedGenerationMethods", [])]
                     else:
                         models = [m["name"].split("/")[-1] for m in data.get("models", []) if "generateContent" in m.get("supportedGenerationMethods", [])]
+                    source = "live"
         
         elif provider in ["openai", "nvidia", "openrouter", "lmstudio"] and (api_key or provider == "lmstudio"):
             import httpx
@@ -173,6 +182,7 @@ async def list_runtime_models(request: dict[str, Any]) -> dict[str, Any]:
                         models = [m for m in raw_models if "embed" in m.lower() or "similarity" in m.lower()]
                     else:
                         models = raw_models
+                    source = "live"
                         
         elif provider == "ollama":
             import httpx
@@ -186,12 +196,10 @@ async def list_runtime_models(request: dict[str, Any]) -> dict[str, Any]:
                         models = [m for m in raw_models if "embed" in m.lower() or "minilm" in m.lower()]
                     else:
                         models = raw_models
+                    source = "live"
     except Exception:
         pass
-        
-    if not models:
-        models = fallbacks.get(provider, [fallbacks["openai"][0]])
-        
+
     models = sorted(list(set(models)))
     
     if mode == "embedding":
@@ -215,7 +223,7 @@ async def list_runtime_models(request: dict[str, Any]) -> dict[str, Any]:
         elif provider == "gemini":
             recommendation = "gemini-1.5-flash"
         elif provider == "nvidia":
-            recommendation = "meta/llama3-70b-instruct"
+            recommendation = "meta/llama-3.1-70b-instruct"
         elif provider == "openrouter":
             recommendation = "meta-llama/llama-3-8b-instruct:free"
         elif provider == "ollama":
@@ -225,7 +233,8 @@ async def list_runtime_models(request: dict[str, Any]) -> dict[str, Any]:
         
     return {
         "models": models,
-        "recommendation": recommendation
+        "recommendation": recommendation,
+        "source": source
     }
 
 

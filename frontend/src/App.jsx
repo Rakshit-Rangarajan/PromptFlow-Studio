@@ -18,11 +18,14 @@ import {
   GitBranch,
   KeyRound,
   Link2Off,
+  LogIn,
+  LogOut,
   Plus,
   Save,
   Search,
   Sparkles,
   Split,
+  User,
   Trash2,
   Waypoints,
   X,
@@ -34,6 +37,7 @@ import {
   buildGraphPayload,
   filterDuplicateLinks,
   normalizeNodes,
+  linkSignature,
   portPosition,
   scanTemplateVariables,
   wouldCreateCycle
@@ -46,48 +50,45 @@ const initialNodes = normalizeNodes([
   {
     id: "input-1",
     type: "input",
-    label: "User brief",
+    label: "User input",
     position: { x: 60, y: 140 },
     inputs: [],
     outputs: [{ id: "value", label: "value" }],
-    data: { key: "brief", value: "Summarize the latest support ticket." }
-  },
-  {
-    id: "vector-1",
-    type: "vector",
-    label: "Semantic context",
-    position: { x: 320, y: 320 },
-    inputs: [{ id: "query", label: "query" }],
-    outputs: [{ id: "documents", label: "documents" }],
-    data: { collection: "knowledge_base", index: "vector_index", limit: 4 }
+    data: { key: "input", value: "Describe quantum physics in one sentence." }
   },
   {
     id: "prompt-1",
     type: "prompt",
-    label: "Prompt template",
-    position: { x: 320, y: 122 },
+    label: "Prompt instructions",
+    position: { x: 360, y: 140 },
     inputs: [],
     outputs: [{ id: "prompt", label: "prompt" }],
-    data: {
-      template: "You are a precise support copilot. Use {{brief}} and {{documents}} to draft a concise response."
-    }
+    data: { template: "" }
   },
   {
     id: "llm-1",
     type: "llm",
-    label: "Model response",
-    position: { x: 575, y: 164 },
+    label: "LLM model",
+    position: { x: 700, y: 140 },
     inputs: [{ id: "prompt", label: "prompt" }],
     outputs: [{ id: "completion", label: "completion" }],
     data: { provider: "openai", model: "gpt-4o-mini", temperature: 0.3 }
+  },
+  {
+    id: "output-1",
+    type: "output",
+    label: "Final output",
+    position: { x: 1000, y: 140 },
+    inputs: [{ id: "input", label: "input" }],
+    outputs: [],
+    data: {}
   }
 ]);
 
 const initialLinks = [
-  { id: "l1", sourceNode: "input-1", sourcePort: "value", targetNode: "prompt-1", targetPort: "brief", active: true },
-  { id: "l2", sourceNode: "input-1", sourcePort: "value", targetNode: "vector-1", targetPort: "query", active: true },
-  { id: "l3", sourceNode: "vector-1", sourcePort: "documents", targetNode: "prompt-1", targetPort: "documents", active: true },
-  { id: "l4", sourceNode: "prompt-1", sourcePort: "prompt", targetNode: "llm-1", targetPort: "prompt", active: true }
+  { id: "l1", sourceNode: "input-1", sourcePort: "value", targetNode: "prompt-1", targetPort: "input", active: true },
+  { id: "l2", sourceNode: "prompt-1", sourcePort: "prompt", targetNode: "llm-1", targetPort: "prompt", active: true },
+  { id: "l3", sourceNode: "llm-1", sourcePort: "completion", targetNode: "output-1", targetPort: "input", active: true }
 ];
 
 const nodeTypes = [
@@ -112,11 +113,11 @@ const navItems = [
 
 const workflowTemplates = [
   {
-    name: "Simple Chatbot",
-    description: "A simple linear chatbot flow from input, prompt, model, and final terminal display.",
+    name: "Blank Agent",
+    description: "Start with an open prompt box. Type any task you want and let the model answer it directly.",
     nodes: normalizeNodes([
-      { id: "input-1", type: "input", label: "User input", position: { x: 80, y: 150 }, inputs: [], outputs: [{ id: "value", label: "value" }], data: { key: "input", value: "Describe quantum physics in one sentence." } },
-      { id: "prompt-1", type: "prompt", label: "Prompt template", position: { x: 380, y: 150 }, inputs: [], outputs: [{ id: "prompt", label: "prompt" }], data: { template: "Explain this topic simply: {{input}}" } },
+      { id: "input-1", type: "input", label: "User input", position: { x: 80, y: 150 }, inputs: [], outputs: [{ id: "value", label: "value" }], data: { key: "input", value: "Ask me anything." } },
+      { id: "prompt-1", type: "prompt", label: "Prompt instructions", position: { x: 380, y: 150 }, inputs: [], outputs: [{ id: "prompt", label: "prompt" }], data: { template: "" } },
       { id: "llm-1", type: "llm", label: "LLM Model", position: { x: 680, y: 150 }, inputs: [{ id: "prompt", label: "prompt" }], outputs: [{ id: "completion", label: "completion" }], data: { provider: "openai", model: "gpt-4o-mini", temperature: 0.3 } },
       { id: "output-1", type: "output", label: "Final output", position: { x: 980, y: 150 }, inputs: [{ id: "input", label: "input" }], outputs: [], data: {} }
     ]),
@@ -127,57 +128,63 @@ const workflowTemplates = [
     ]
   },
   {
-    name: "RAG Support Pipeline",
-    description: "Input search query, perform semantic retrieval from vector database, enrich context, and synthesize response.",
+    name: "Meeting Notes",
+    description: "Turns rough notes into clean action items and a short summary.",
     nodes: normalizeNodes([
-      { id: "input-1", type: "input", label: "Support ticket", position: { x: 60, y: 160 }, inputs: [], outputs: [{ id: "value", label: "value" }], data: { key: "query", value: "What is the refund policy?" } },
-      { id: "vector-1", type: "vector", label: "Semantic Search", position: { x: 340, y: 300 }, inputs: [{ id: "query", label: "query" }], outputs: [{ id: "documents", label: "documents" }], data: { collection: "support_kb", index: "vector_index", limit: 3 } },
-      { id: "prompt-1", type: "prompt", label: "Enrichment", position: { x: 620, y: 120 }, inputs: [], outputs: [{ id: "prompt", label: "prompt" }], data: { template: "You are a customer assistant. Answer the user query: {{query}} using the retrieval context:\n\n{{documents}}" } },
-      { id: "llm-1", type: "llm", label: "Synthesizer", position: { x: 900, y: 150 }, inputs: [{ id: "prompt", label: "prompt" }], outputs: [{ id: "completion", label: "completion" }], data: { provider: "openai", model: "gpt-4o-mini", temperature: 0.2 } },
-      { id: "output-1", type: "output", label: "Response", position: { x: 1180, y: 150 }, inputs: [{ id: "input", label: "input" }], outputs: [], data: {} }
+      { id: "input-1", type: "input", label: "Notes", position: { x: 80, y: 150 }, inputs: [], outputs: [{ id: "value", label: "value" }], data: { key: "notes", value: "Project kickoff: finish MVP, test login, ship demo." } },
+      { id: "prompt-1", type: "prompt", label: "Prompt instructions", position: { x: 380, y: 150 }, inputs: [], outputs: [{ id: "prompt", label: "prompt" }], data: { template: "Turn these notes into a short summary with bullet action items.\n\nNotes:\n{{input}}" } },
+      { id: "llm-1", type: "llm", label: "Meeting writer", position: { x: 680, y: 150 }, inputs: [{ id: "prompt", label: "prompt" }], outputs: [{ id: "completion", label: "completion" }], data: { provider: "openai", model: "gpt-4o-mini", temperature: 0.2 } },
+      { id: "output-1", type: "output", label: "Final output", position: { x: 980, y: 150 }, inputs: [{ id: "input", label: "input" }], outputs: [], data: {} }
     ]),
     links: [
-      { id: "rag-l1", sourceNode: "input-1", sourcePort: "value", targetNode: "vector-1", targetPort: "query", active: true },
-      { id: "rag-l2", sourceNode: "input-1", sourcePort: "value", targetNode: "prompt-1", targetPort: "query", active: true },
-      { id: "rag-l3", sourceNode: "vector-1", sourcePort: "documents", targetNode: "prompt-1", targetPort: "documents", active: true },
-      { id: "rag-l4", sourceNode: "prompt-1", sourcePort: "prompt", targetNode: "llm-1", targetPort: "prompt", active: true },
-      { id: "rag-l5", sourceNode: "llm-1", sourcePort: "completion", targetNode: "output-1", targetPort: "input", active: true }
+      { id: "mn-l1", sourceNode: "input-1", sourcePort: "value", targetNode: "prompt-1", targetPort: "input", active: true },
+      { id: "mn-l2", sourceNode: "prompt-1", sourcePort: "prompt", targetNode: "llm-1", targetPort: "prompt", active: true },
+      { id: "mn-l3", sourceNode: "llm-1", sourcePort: "completion", targetNode: "output-1", targetPort: "input", active: true }
     ]
   },
   {
-    name: "Multi-Agent Research Flow",
-    description: "A multi-agent chain where a researcher agent compiles raw data, a writer agent drafts an article, and a coordinator model aggregates details.",
+    name: "Email Reply",
+    description: "Drafts a polite reply from a short message or customer request.",
     nodes: normalizeNodes([
-      { id: "input-1", type: "input", label: "Research briefing", position: { x: 50, y: 180 }, inputs: [], outputs: [{ id: "value", label: "value" }], data: { key: "task", value: "Generative AI agents in healthcare" } },
-      { id: "subagent-researcher", type: "subagent", label: "Researcher agent", position: { x: 340, y: 180 }, inputs: [{ id: "task", label: "task" }, { id: "context", label: "context" }], outputs: [{ id: "result", label: "result" }], data: { role: "Deep Researcher", handoff: "Research this topic thoroughly. List major innovations, challenges, and statistics.", provider: "openai", model: "gpt-4o-mini" } },
-      { id: "subagent-writer", type: "subagent", label: "Writer agent", position: { x: 640, y: 180 }, inputs: [{ id: "task", label: "task" }, { id: "context", label: "context" }], outputs: [{ id: "result", label: "result" }], data: { role: "Technical Copywriter", handoff: "Draft a beautifully organized summary based on the research findings provided in the context.", provider: "openai", model: "gpt-4o-mini" } },
-      { id: "llm-coordinator", type: "llm", label: "Executive Coordinator", position: { x: 940, y: 180 }, inputs: [{ id: "prompt", label: "prompt" }], outputs: [{ id: "completion", label: "completion" }], data: { provider: "openai", model: "gpt-4o-mini", temperature: 0.1 } },
-      { id: "output-1", type: "output", label: "Final summary", position: { x: 1220, y: 180 }, inputs: [{ id: "input", label: "input" }], outputs: [], data: {} }
+      { id: "input-1", type: "input", label: "Incoming email", position: { x: 80, y: 150 }, inputs: [], outputs: [{ id: "value", label: "value" }], data: { key: "email", value: "Can you confirm the delivery date?" } },
+      { id: "prompt-1", type: "prompt", label: "Prompt instructions", position: { x: 380, y: 150 }, inputs: [], outputs: [{ id: "prompt", label: "prompt" }], data: { template: "Write a clear, warm, professional email reply.\n\nEmail:\n{{input}}" } },
+      { id: "llm-1", type: "llm", label: "Reply drafter", position: { x: 680, y: 150 }, inputs: [{ id: "prompt", label: "prompt" }], outputs: [{ id: "completion", label: "completion" }], data: { provider: "openai", model: "gpt-4o-mini", temperature: 0.4 } },
+      { id: "output-1", type: "output", label: "Final output", position: { x: 980, y: 150 }, inputs: [{ id: "input", label: "input" }], outputs: [], data: {} }
     ]),
     links: [
-      { id: "ma-l1", sourceNode: "input-1", sourcePort: "value", targetNode: "subagent-researcher", targetPort: "task", active: true },
-      { id: "ma-l2", sourceNode: "subagent-researcher", sourcePort: "result", targetNode: "subagent-writer", targetPort: "context", active: true },
-      { id: "ma-l3", sourceNode: "input-1", sourcePort: "value", targetNode: "subagent-writer", targetPort: "task", active: true },
-      { id: "ma-l4", sourceNode: "subagent-writer", sourcePort: "result", targetNode: "llm-coordinator", targetPort: "prompt", active: true },
-      { id: "ma-l5", sourceNode: "llm-coordinator", sourcePort: "completion", targetNode: "output-1", targetPort: "input", active: true }
+      { id: "er-l1", sourceNode: "input-1", sourcePort: "value", targetNode: "prompt-1", targetPort: "input", active: true },
+      { id: "er-l2", sourceNode: "prompt-1", sourcePort: "prompt", targetNode: "llm-1", targetPort: "prompt", active: true },
+      { id: "er-l3", sourceNode: "llm-1", sourcePort: "completion", targetNode: "output-1", targetPort: "input", active: true }
     ]
   },
   {
-    name: "Conditional Router",
-    description: "Routes user message dynamically. Help-needed or urgent messages route to a high-priority model, otherwise route to a standard assistant agent.",
+    name: "Support Answer",
+    description: "Helps answer a user question with a short, useful response.",
     nodes: normalizeNodes([
-      { id: "input-1", type: "input", label: "Incoming request", position: { x: 60, y: 180 }, inputs: [], outputs: [{ id: "value", label: "value" }], data: { key: "input", value: "HELP: The system is completely offline and throwing error 500." } },
-      { id: "router-1", type: "router", label: "Priority check", position: { x: 340, y: 180 }, inputs: [{ id: "input", label: "input" }], outputs: [{ id: "true", label: "True" }, { id: "false", label: "False" }], data: { condition: "'help' in input.lower() or 'offline' in input.lower() or 'urgent' in input.lower()" } },
-      { id: "llm-priority", type: "llm", label: "Urgent response model", position: { x: 660, y: 80 }, inputs: [{ id: "prompt", label: "prompt" }], outputs: [{ id: "completion", label: "completion" }], data: { provider: "openai", model: "gpt-4o-mini", temperature: 0.1 } },
-      { id: "subagent-standard", type: "subagent", label: "General agent", position: { x: 660, y: 280 }, inputs: [{ id: "task", label: "task" }, { id: "context", label: "context" }], outputs: [{ id: "result", label: "result" }], data: { role: "Standard Assistant", handoff: "Answer this request in a polite, helpful tone.", provider: "openai", model: "gpt-4o-mini" } },
-      { id: "output-1", type: "output", label: "System output", position: { x: 960, y: 180 }, inputs: [{ id: "input", label: "input" }], outputs: [], data: {} }
+      { id: "input-1", type: "input", label: "Question", position: { x: 80, y: 150 }, inputs: [], outputs: [{ id: "value", label: "value" }], data: { key: "question", value: "How do I reset my password?" } },
+      { id: "prompt-1", type: "prompt", label: "Prompt instructions", position: { x: 380, y: 150 }, inputs: [], outputs: [{ id: "prompt", label: "prompt" }], data: { template: "Answer the user question in a short, helpful, step-by-step way.\n\nQuestion:\n{{input}}" } },
+      { id: "llm-1", type: "llm", label: "Support agent", position: { x: 680, y: 150 }, inputs: [{ id: "prompt", label: "prompt" }], outputs: [{ id: "completion", label: "completion" }], data: { provider: "openai", model: "gpt-4o-mini", temperature: 0.2 } },
+      { id: "output-1", type: "output", label: "Final output", position: { x: 980, y: 150 }, inputs: [{ id: "input", label: "input" }], outputs: [], data: {} }
     ]),
     links: [
-      { id: "route-l1", sourceNode: "input-1", sourcePort: "value", targetNode: "router-1", targetPort: "input", active: true },
-      { id: "route-l2", sourceNode: "router-1", sourcePort: "true", targetNode: "llm-priority", targetPort: "prompt", active: true },
-      { id: "route-l3", sourceNode: "router-1", sourcePort: "false", targetNode: "subagent-standard", targetPort: "task", active: true },
-      { id: "route-l4", sourceNode: "llm-priority", sourcePort: "completion", targetNode: "output-1", targetPort: "input", active: true },
-      { id: "route-l5", sourceNode: "subagent-standard", sourcePort: "result", targetNode: "output-1", targetPort: "input", active: true }
+      { id: "sa-l1", sourceNode: "input-1", sourcePort: "value", targetNode: "prompt-1", targetPort: "input", active: true },
+      { id: "sa-l2", sourceNode: "prompt-1", sourcePort: "prompt", targetNode: "llm-1", targetPort: "prompt", active: true },
+      { id: "sa-l3", sourceNode: "llm-1", sourcePort: "completion", targetNode: "output-1", targetPort: "input", active: true }
+    ]
+  },
+  {
+    name: "Code Helper",
+    description: "Explains a code snippet or suggests a fix in plain language.",
+    nodes: normalizeNodes([
+      { id: "input-1", type: "input", label: "Code or bug", position: { x: 80, y: 150 }, inputs: [], outputs: [{ id: "value", label: "value" }], data: { key: "code", value: "My API call fails with 401." } },
+      { id: "prompt-1", type: "prompt", label: "Prompt instructions", position: { x: 380, y: 150 }, inputs: [], outputs: [{ id: "prompt", label: "prompt" }], data: { template: "Help me understand or fix this code/problem.\n\nInput:\n{{input}}" } },
+      { id: "llm-1", type: "llm", label: "Code helper", position: { x: 680, y: 150 }, inputs: [{ id: "prompt", label: "prompt" }], outputs: [{ id: "completion", label: "completion" }], data: { provider: "openai", model: "gpt-4o-mini", temperature: 0.2 } },
+      { id: "output-1", type: "output", label: "Final output", position: { x: 980, y: 150 }, inputs: [{ id: "input", label: "input" }], outputs: [], data: {} }
+    ]),
+    links: [
+      { id: "ch-l1", sourceNode: "input-1", sourcePort: "value", targetNode: "prompt-1", targetPort: "input", active: true },
+      { id: "ch-l2", sourceNode: "prompt-1", sourcePort: "prompt", targetNode: "llm-1", targetPort: "prompt", active: true },
+      { id: "ch-l3", sourceNode: "llm-1", sourcePort: "completion", targetNode: "output-1", targetPort: "input", active: true }
     ]
   }
 ];
@@ -189,6 +196,91 @@ const defaultRuntime = {
     { id: "in_memory", name: "Local LRU Cache", kind: "in_memory", maxLimit: 1000, ttl: 300 }
   ]
 };
+
+const STORAGE_PREFIX = "promptflow-studio";
+
+function storageKey(kind, username = "guest") {
+  return `${STORAGE_PREFIX}:${kind}:${username}`;
+}
+
+function readStoredJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
+
+function buildExecutionRuntime(nodes, runtime) {
+  const providers = Object.fromEntries((runtime.providers || []).map((provider) => [provider.id, provider]));
+  const databases = runtime.databases || [];
+  const selectedVectorNode = normalizeNodes(nodes).find((node) => node.type === "vector" && node.data?.vectorDatabase);
+  const selectedVectorDatabase =
+    databases.find((db) => db.id === selectedVectorNode?.data?.vectorDatabase) ||
+    databases[0] ||
+    {};
+
+  return {
+    providers,
+    databases,
+    vectorDatabase: selectedVectorDatabase
+  };
+}
+
+function defaultModelForProvider(providerType = "openai", mode = "completion") {
+  const type = `${providerType || "openai"}`.toLowerCase();
+  if (mode === "embedding") {
+    if (type === "mongodb" || type === "mongo" || type === "mongodb_atlas") return "mongodb-embedding";
+    if (type === "gemini") return "text-embedding-004";
+    if (type === "nvidia" || type === "nim" || type === "nvidia-nim") return "nvidia/embeddings-nv-embed-qa-4";
+    if (type === "openrouter") return "nomic/nomic-embed-text-v1.5";
+    if (type === "ollama") return "nomic-embed-text";
+    if (type === "lmstudio" || type === "lm-studio") return "";
+    return "text-embedding-3-small";
+  }
+
+  if (type === "gemini") return "gemini-1.5-flash";
+  if (type === "nvidia" || type === "nim" || type === "nvidia-nim") return "meta/llama-3.1-70b-instruct";
+  if (type === "openrouter") return "meta-llama/llama-3-8b-instruct:free";
+  if (type === "ollama") return "llama3";
+  if (type === "lmstudio" || type === "lm-studio") return "";
+  return "gpt-4o-mini";
+}
+
+function normalizeProviderType(provider) {
+  return `${provider?.providerType || provider?.id || ""}`.toLowerCase();
+}
+
+function pickBestProvider(runtime, mode = "completion") {
+  const providers = runtime?.providers || [];
+  const priority = mode === "embedding"
+    ? ["mongodb", "mongo", "mongodb_atlas", "openai", "gemini", "openrouter", "nvidia", "ollama", "lmstudio", "lm-studio"]
+    : ["openai", "gemini", "openrouter", "nvidia", "nim", "nvidia-nim", "ollama", "lmstudio", "lm-studio"];
+
+  const live = providers.filter(Boolean).map((provider) => ({
+    provider,
+    type: normalizeProviderType(provider),
+    hasKey: !!provider.apiKey
+  }));
+
+  for (const wanted of priority) {
+    const match = live.find((entry) => entry.type === wanted && (entry.hasKey || ["ollama", "lmstudio", "lm-studio", "mongodb", "mongo", "mongodb_atlas"].includes(entry.type)));
+    if (match) return match.provider;
+  }
+
+  return live[0]?.provider || null;
+}
+
+function providerKey(provider) {
+  return provider?.id || provider?.providerType || "openai";
+}
 
 function parseJsonWorkflow(text) {
   if (!text) return null;
@@ -219,12 +311,121 @@ function parseJsonWorkflow(text) {
   return null;
 }
 
+function buildFixGuide(issue = {}) {
+  const message = `${issue.message || ""}`.toLowerCase();
+  const code = `${issue.code || ""}`.toLowerCase();
+
+  if (code === "missing_provider_key" || message.includes("api key")) {
+    return {
+      title: "API key missing",
+      focus: "providers",
+      steps: [
+        "Open Settings.",
+        "Pick the right AI provider.",
+        "Paste the API key.",
+        "Hit Save."
+      ],
+      action: "Open Providers"
+    };
+  }
+
+  if (code === "missing_vector_db" || code === "missing_db_connection" || message.includes("connection string")) {
+    return {
+      title: "DB setup missing",
+      focus: "databases",
+      steps: [
+        "Open Settings.",
+        "Pick the database.",
+        "Add the connection string.",
+        "Hit Save."
+      ],
+      action: "Open Databases"
+    };
+  }
+
+  if (message.includes("404") || message.includes("not found") || message.includes("embedding")) {
+    return {
+      title: "Embedding path broke",
+      focus: "databases",
+      steps: [
+        "Open the vector node.",
+        "Switch Embedding Provider to MongoDB Embeddings.",
+        "Save settings.",
+        "Run again."
+      ],
+      action: "Open Databases"
+    };
+  }
+
+  if (message.includes("pick a vector database")) {
+    return {
+      title: "Pick DB first",
+      focus: "databases",
+      steps: [
+        "Open the vector node.",
+        "Choose a database in the node panel.",
+        "Save settings if needed."
+      ],
+      action: "Open Databases"
+    };
+  }
+
+  if (code === "no_output" || message.includes("no output")) {
+    return {
+      title: "No output",
+      focus: "settings",
+      steps: [
+        "Check the flow has an Output node.",
+        "Wire the last node into it.",
+        "Run again."
+      ],
+      action: "Open Settings"
+    };
+  }
+
+  return {
+    title: "Need a fix",
+    focus: "providers",
+    steps: [
+      "Open Settings.",
+      "Check provider and database values.",
+      "Save settings.",
+      "Run again."
+    ],
+    action: "Open Settings"
+  };
+}
+
+async function readErrorMessage(response) {
+  try {
+    const data = await response.json();
+    return data.detail || data.message || data.error || "Run failed.";
+  } catch {
+    try {
+      const text = await response.text();
+      return text || "Run failed.";
+    } catch {
+      return "Run failed.";
+    }
+  }
+}
+
 export function App() {
+  const storedAccount = readStoredJson(storageKey("account"), null);
+  const storedSession = readStoredJson(storageKey("session"), null);
+  const storedRuntime = readStoredJson(storageKey("runtime", storedSession?.username || "guest"), defaultRuntime);
+
+  const [account, setAccount] = useState(storedAccount);
+  const [sessionUser, setSessionUser] = useState(storedSession);
+  const [authMode, setAuthMode] = useState(storedAccount ? "login" : "create");
+  const [authForm, setAuthForm] = useState({ username: storedAccount?.username || "", password: "" });
+  const [authError, setAuthError] = useState("");
+  const [runtimeSaveStatus, setRuntimeSaveStatus] = useState("Saved locally");
   const [activeView, setActiveView] = useState("ide");
   const [nodes, setNodes] = useState(initialNodes);
   const [links, setLinks] = useState(initialLinks);
   const [graphId, setGraphId] = useState(null);
-  const [graphName, setGraphName] = useState("Support Copilot Flow");
+  const [graphName, setGraphName] = useState("Simple Chatbot");
   const [savedFlows, setSavedFlows] = useState([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMode, setChatMode] = useState("tester");
@@ -236,6 +437,8 @@ export function App() {
   const [nodeModelCatalog, setNodeModelCatalog] = useState({ models: [], recommendation: "" });
   const [nodeLoadingModels, setNodeLoadingModels] = useState(false);
   const [nodeDbInfo, setNodeDbInfo] = useState({ suggested_setup: "" });
+  const [lastExecutionIssue, setLastExecutionIssue] = useState(null);
+  const [settingsFocus, setSettingsFocus] = useState(null);
 
 
 
@@ -315,21 +518,131 @@ export function App() {
   const [currentExecutionNode, setCurrentExecutionNode] = useState(null);
   const [executionProgress, setExecutionProgress] = useState({ current: 0, total: 0 });
   const [compiledCode, setCompiledCode] = useState("");
-  const [runtime, setRuntime] = useState(defaultRuntime);
+  const [runtime, setRuntime] = useState(storedRuntime);
   const canvasRef = useRef(null);
   const panRef = useRef(null);
+
+  useEffect(() => {
+    if (!sessionUser?.username) return;
+    setRuntime(readStoredJson(storageKey("runtime", sessionUser.username), defaultRuntime));
+  }, [sessionUser?.username]);
+
+  useEffect(() => {
+    if (!sessionUser?.username) return;
+    writeStoredJson(storageKey("runtime", sessionUser.username), runtime);
+    setRuntimeSaveStatus("Saved locally");
+  }, [runtime, sessionUser?.username]);
+
+  function saveRuntimeNow() {
+    if (!sessionUser?.username) return;
+    writeStoredJson(storageKey("runtime", sessionUser.username), runtime);
+    setRuntimeSaveStatus("Saved locally");
+  }
+
+  function resetRuntime() {
+    setRuntime(defaultRuntime);
+    if (sessionUser?.username) {
+      writeStoredJson(storageKey("runtime", sessionUser.username), defaultRuntime);
+    }
+    setRuntimeSaveStatus("Reset to blank.");
+  }
+
+  function submitAuth() {
+    const username = authForm.username.trim();
+    const password = authForm.password.trim();
+    if (!username || !password) {
+      setAuthError("Need name and password.");
+      return;
+    }
+
+    const existing = account;
+    if (authMode === "create") {
+      const nextAccount = { username, password };
+      setAccount(nextAccount);
+      writeStoredJson(storageKey("account"), nextAccount);
+      setSessionUser({ username });
+      writeStoredJson(storageKey("session"), { username });
+      setRuntime(readStoredJson(storageKey("runtime", username), defaultRuntime));
+      setAuthError("");
+      setRuntimeSaveStatus("Saved locally");
+      return;
+    }
+
+    if (!existing || existing.username !== username || existing.password !== password) {
+      setAuthError("Wrong name or password.");
+      return;
+    }
+
+    setSessionUser({ username });
+    writeStoredJson(storageKey("session"), { username });
+    setRuntime(readStoredJson(storageKey("runtime", username), defaultRuntime));
+    setAuthError("");
+    setRuntimeSaveStatus("Saved locally");
+  }
+
+  function logout() {
+    setSessionUser(null);
+    try {
+      localStorage.removeItem(storageKey("session"));
+    } catch {}
+  }
 
   const graphNodes = useMemo(() => normalizeNodes(nodes), [nodes]);
   const nodeMap = useMemo(() => new Map(graphNodes.map((node) => [node.id, node])), [graphNodes]);
   const selectedNode = nodeMap.get(selectedId);
   const selectedLink = links.find((link) => link.id === selectedLinkId);
   const hasCycle = useMemo(() => wouldCreateCycle(graphNodes, links), [graphNodes, links]);
+  const fixGuide = lastExecutionIssue ? buildFixGuide(lastExecutionIssue) : null;
+
+  useEffect(() => {
+    const providerList = runtime.providers || [];
+    if (providerList.length === 0) return;
+
+    const bestCompletion = pickBestProvider(runtime, "completion");
+    const bestEmbedding = pickBestProvider(runtime, "embedding");
+    if (!bestCompletion && !bestEmbedding) return;
+
+    let changed = false;
+    const nextNodes = graphNodes.map((node) => {
+      if (node.type === "llm" || node.type === "subagent") {
+        const currentProvider = node.data.provider || "";
+        const providerExists = providerList.some((provider) => provider.id === currentProvider || provider.providerType === currentProvider);
+        const chosenProvider = providerExists ? currentProvider : providerKey(bestCompletion || providerList[0]);
+        const chosenModel = node.data.model || defaultModelForProvider(normalizeProviderType(bestCompletion || providerList[0]), "completion");
+        if (chosenProvider !== currentProvider || chosenModel !== node.data.model) {
+          changed = true;
+          return { ...node, data: { ...node.data, provider: chosenProvider, model: chosenModel } };
+        }
+      }
+
+      if (node.type === "vector") {
+        const providerChanged = node.data.provider !== "mongodb";
+        const modelChanged = node.data.model !== "mongodb-embedding";
+        if (providerChanged || modelChanged) {
+          changed = true;
+          return { ...node, data: { ...node.data, provider: "mongodb", model: "mongodb-embedding" } };
+        }
+      }
+
+      return node;
+    });
+
+    if (changed) {
+      setNodes(normalizeNodes(nextNodes));
+    }
+  }, [runtime.providers, graphNodes]);
 
   useEffect(() => {
     if (selectedNode && (selectedNode.type === "llm" || selectedNode.type === "subagent" || selectedNode.type === "vector")) {
       const activeProvId = selectedNode.data.provider || "openai";
       const provConf = runtime.providers.find(p => p.id === activeProvId);
       const isEmbedding = selectedNode.type === "vector";
+
+      if (isEmbedding && activeProvId === "mongodb") {
+        setNodeModelCatalog({ models: ["mongodb-embedding"], recommendation: "mongodb-embedding", source: "local" });
+        setNodeLoadingModels(false);
+        return;
+      }
       
       setNodeLoadingModels(true);
       fetch(`${API_BASE}/runtime/models`, {
@@ -345,13 +658,35 @@ export function App() {
       .then(res => res.json())
       .then(data => {
         setNodeModelCatalog(data);
+        const recommended = data?.recommendation || "";
+        const currentModel = selectedNode.data.model || "";
+        const modelList = Array.isArray(data?.models) ? data.models : [];
+        const shouldAutoPick = Boolean(
+          selectedNode &&
+          (selectedNode.type === "llm" || selectedNode.type === "subagent") &&
+          recommended &&
+          (!currentModel || !modelList.includes(currentModel) || currentModel !== recommended)
+        );
+
+        if (shouldAutoPick) {
+          setNodes((current) =>
+            normalizeNodes(
+              current.map((node) =>
+                node.id === selectedNode.id
+                  ? { ...node, data: { ...node.data, model: recommended } }
+                  : node
+              )
+            )
+          );
+        }
+
         setNodeLoadingModels(false);
       })
       .catch(() => {
         setNodeLoadingModels(false);
       });
     }
-  }, [selectedNode?.id, selectedNode?.data?.provider, runtime.providers]);
+  }, [selectedNode?.id, selectedNode?.data?.provider, selectedNode?.data?.model, runtime.providers]);
 
   useEffect(() => {
     if (selectedNode && selectedNode.type === "vector") {
@@ -445,12 +780,9 @@ export function App() {
         targetPort: hoverPort.portId,
         active: false
       };
-      const duplicateExists = links.some(link => 
-        (link.sourceNode === candidate.sourceNode && link.targetNode === candidate.targetNode) ||
-        (link.sourceNode === candidate.targetNode && link.targetNode === candidate.sourceNode)
-      );
+      const duplicateExists = links.some((link) => linkSignature(link) === linkSignature(candidate));
       if (duplicateExists) {
-        setStatus("Connection exists: only one link is allowed between the same two nodes.");
+        setStatus("Same link already there.");
       } else if (wouldCreateCycle(graphNodes, links, candidate)) {
         setLinks((current) => [...current, { ...candidate, invalid: true }]);
         setStatus("Cycle intercepted: execution locked until the red path is removed.");
@@ -608,6 +940,11 @@ export function App() {
     }, 60);
   }
 
+  useEffect(() => {
+    autoLayoutNodes();
+    // one tidy start for the first canvas load
+  }, []);
+
   function deleteSelectedLink() {
     if (!selectedLinkId) return;
     setLinks((current) => current.filter((link) => link.id !== selectedLinkId));
@@ -640,7 +977,7 @@ export function App() {
              : [{ id: type === "llm" ? "completion" : "output", label: type === "llm" ? "completion" : "output" }],
       data: {}
     };
-    if (type === "prompt") base.data.template = "Write about {{input}} with clarity.";
+    if (type === "prompt") base.data.template = "";
     if (type === "llm") base.data = { provider: "openai", model: "gpt-4o-mini", temperature: 0.2 };
     if (type === "subagent") {
       base.label = "Sub-agent";
@@ -648,7 +985,7 @@ export function App() {
       base.outputs = [{ id: "result", label: "result" }];
       base.data = { role: "Specialist", handoff: "Return a concise result to the parent agent." };
     }
-    if (type === "vector") base.data = { collection: "knowledge_base", index: "vector_index", limit: 4, provider: "openai", model: "text-embedding-3-small" };
+    if (type === "vector") base.data = { collection: "knowledge_base", index: "vector_index", limit: 4, provider: "mongodb", model: "mongodb-embedding" };
     if (type === "router") base.data = { condition: "len(input) > 10" };
     if (type === "code") base.data = { code: "output = input.upper()" };
     if (type === "custom") {
@@ -717,12 +1054,14 @@ export function App() {
   async function runGraph() {
     if (hasCycle || links.some((link) => link.invalid)) {
       setStatus("Execution locked: remove invalid cycle paths first.");
+      setLastExecutionIssue({ code: "cycle", label: "Workflow", message: "Remove the red cycle link first." });
       return;
     }
     
     // Reset execution and node states
     setNodeStates({});
     setNodeOutputs({});
+    setLastExecutionIssue(null);
     setExecutionActive(true);
     setCurrentExecutionNode(null);
     setExecutionProgress({ current: 0, total: 0 });
@@ -734,12 +1073,20 @@ export function App() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         graph: buildGraphPayload(graphName, graphNodes, links),
-        runtime: {
-          providers: Object.fromEntries(runtime.providers.map((p) => [p.id, p])),
-          vectorDatabase: runtime.databases[0] || {}
-        }
+        runtime: buildExecutionRuntime(graphNodes, runtime)
       })
     });
+    if (!response.ok) {
+      const message = await readErrorMessage(response);
+      setStatus(`Error: ${message}`);
+      setLastExecutionIssue({
+        code: message.toLowerCase().includes("api key") ? "missing_provider_key" : message.toLowerCase().includes("connection string") ? "missing_vector_db" : "runtime_error",
+        label: "Workflow",
+        message
+      });
+      setExecutionActive(false);
+      return;
+    }
     if (!response.body) {
       setStatus("Streaming unavailable.");
       setExecutionActive(false);
@@ -817,7 +1164,17 @@ export function App() {
         } else if (event === "complete") {
           setExecutionActive(false);
           setCurrentExecutionNode(null);
-          setStatus("Execution complete.");
+          if (data.errorCount > 0) {
+            const firstError = data.errors?.[0];
+            setStatus(`Error: ${firstError?.label || firstError?.node || "node"} - ${firstError?.message || "unknown"}`);
+            setLastExecutionIssue(firstError || { code: "runtime_error", label: "Workflow", message: "Flow failed." });
+          } else if (data.hasOutput) {
+            setStatus("Execution complete.");
+            setLastExecutionIssue(null);
+          } else {
+            setStatus("No output came out.");
+            setLastExecutionIssue({ code: "no_output", label: "Workflow", message: "No output came out." });
+          }
         }
       } catch (e) {
         console.error("Failed to parse SSE payload:", payloadStr, e);
@@ -879,22 +1236,36 @@ export function App() {
     // Start graph execution
     setNodeStates({});
     setNodeOutputs({});
+    setLastExecutionIssue(null);
     setExecutionActive(true);
     setCurrentExecutionNode(null);
     setExecutionProgress({ current: 0, total: 0 });
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
     try {
       const response = await fetch(`${API_BASE}/execute/stream`, {
         method: "POST",
+        signal: controller.signal,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           graph: buildGraphPayload(graphName, normalizeNodes(updatedNodes), links),
-          runtime: {
-            providers: Object.fromEntries(runtime.providers.map((p) => [p.id, p])),
-            vectorDatabase: runtime.databases[0] || {}
-          }
+          runtime: buildExecutionRuntime(updatedNodes, runtime)
         })
       });
+      if (!response.ok) {
+        const message = await readErrorMessage(response);
+        setLastExecutionIssue({
+          code: message.toLowerCase().includes("api key") ? "missing_provider_key" : message.toLowerCase().includes("connection string") ? "missing_vector_db" : "runtime_error",
+          label: "Workflow",
+          message
+        });
+        setChatMessages((prev) => prev.map((m) => m.id === responseId ? { ...m, text: `Error: ${message}`, isStreaming: false } : m));
+        setChatLoading(false);
+        setExecutionActive(false);
+        return;
+      }
 
       if (!response.body) {
         setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: "Error: execution stream unavailable.", isStreaming: false } : m));
@@ -931,6 +1302,10 @@ export function App() {
               };
             });
           } else if (event === "node:output" && data.output) {
+            if (!currentText) {
+              currentText = String(data.output);
+              setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
+            }
             setNodeOutputs((prev) => ({
               ...prev,
               [node]: { ...(prev[node] || { chunks: [], result: "" }), result: data.output }
@@ -943,22 +1318,25 @@ export function App() {
             }));
           } else if (event === "node:error") {
             setNodeStates((prev) => ({ ...prev, [node]: "error" }));
-            currentText += `\n\n❌ **Error in step "${label || node}"**: ${message}`;
+            currentText += `\n\nError in step "${label || node}": ${message}`;
             setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
           } else if (event === "complete") {
             setExecutionActive(false);
             setCurrentExecutionNode(null);
-            
-            // Fallback: If no streaming text was captured, try to read the last output node's value
+
             if (!currentText) {
-              const outputNodes = updatedNodes.filter(n => n.type === "output");
-              if (outputNodes.length > 0) {
-                currentText = "Workflow executed successfully! Terminal output generated.";
-                setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
+              if (data.errorCount > 0) {
+                const firstError = data.errors?.[0];
+                currentText = `Error: ${firstError?.label || firstError?.node || "node"} - ${firstError?.message || "unknown"}`;
+                setLastExecutionIssue(firstError || { code: "runtime_error", label: "Workflow", message: "Flow failed." });
+              } else if (data.hasOutput && data.output) {
+                currentText = data.output;
+                setLastExecutionIssue(null);
               } else {
-                currentText = "Workflow execution complete.";
-                setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
+                currentText = "No output came out.";
+                setLastExecutionIssue({ code: "no_output", label: "Workflow", message: "No output came out." });
               }
+              setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
             }
           }
         } catch (e) {
@@ -985,8 +1363,11 @@ export function App() {
 
     } catch (err) {
       console.error(err);
-      setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: "❌ Connection error during workflow execution.", isStreaming: false } : m));
+      const message = err?.name === "AbortError" ? "Workflow timed out." : (err?.message || "Connection error during workflow execution.");
+      setLastExecutionIssue({ code: "runtime_error", label: "Workflow", message });
+      setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: `Error: ${message}`, isStreaming: false } : m));
     } finally {
+      clearTimeout(timeoutId);
       setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, isStreaming: false } : m));
       setChatLoading(false);
       setExecutionActive(false);
@@ -1005,48 +1386,60 @@ export function App() {
     
     setChatMessages((prev) => [...prev, { id: responseId, role: "assistant", text: "", isStreaming: true }]);
     
-    const systemPrompt = `You are PromptFlow Copilot, an expert AI assistant that helps users construct and refine LLM workflows in PromptFlow Studio.
-You can generate nodes and connections. To create or modify a workflow, output a single JSON codeblock wrapped in \`\`\`json ... \`\`\` with this exact structure:
+const systemPrompt = `You are PromptFlow Copilot, an expert AI assistant that helps users construct and refine LLM workflows in PromptFlow Studio.
+You can generate nodes and connections. Keep the workflow simple unless the user asks for retrieval, databases, or RAG. To create or modify a workflow, output a single JSON codeblock wrapped in \`\`\`json ... \`\`\` with this exact structure:
 {
   "nodes": [
-    { "id": "input-1", "type": "input", "label": "User Brief", "position": {"x": 60, "y": 240}, "inputs": [], "outputs": [{"id": "value", "label": "value"}], "data": {"key": "brief", "value": "What is the refund policy?"} },
-    { "id": "vector-1", "type": "vector", "label": "Semantic context", "position": {"x": 480, "y": 380}, "inputs": [{"id": "query", "label": "query"}], "outputs": [{"id": "documents", "label": "documents"}], "data": {"collection": "knowledge_base", "index": "vector_index", "limit": 4} },
-    { "id": "prompt-1", "type": "prompt", "label": "Prompt Template", "position": {"x": 900, "y": 240}, "inputs": [], "outputs": [{"id": "prompt", "label": "prompt"}], "data": {"template": "You are a precise support copilot. Use {{brief}} and {{documents}} to draft a concise response."} },
-    { "id": "llm-1", "type": "llm", "label": "Model Response", "position": {"x": 1320, "y": 240}, "inputs": [{"id": "prompt", "label": "prompt"}], "outputs": [{"id": "completion", "label": "completion"}], "data": {"provider": "openai", "model": "gpt-4o-mini"} }
+    { "id": "input-1", "type": "input", "label": "User Input", "position": {"x": 60, "y": 240}, "inputs": [], "outputs": [{"id": "value", "label": "value"}], "data": {"key": "input", "value": "What is the refund policy?"} },
+    { "id": "prompt-1", "type": "prompt", "label": "Prompt Template", "position": {"x": 420, "y": 240}, "inputs": [], "outputs": [{"id": "prompt", "label": "prompt"}], "data": {"template": "Answer this clearly: {{input}}"} },
+    { "id": "llm-1", "type": "llm", "label": "Model Response", "position": {"x": 780, "y": 240}, "inputs": [{"id": "prompt", "label": "prompt"}], "outputs": [{"id": "completion", "label": "completion"}], "data": {"provider": "openai", "model": "gpt-4o-mini"} },
+    { "id": "output-1", "type": "output", "label": "Final Output", "position": {"x": 1140, "y": 240}, "inputs": [{"id": "input", "label": "input"}], "outputs": [], "data": {} }
   ],
   "links": [
-    { "id": "l1", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "prompt-1", "targetPort": "brief" },
-    { "id": "l2", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "vector-1", "targetPort": "query" },
-    { "id": "l3", "sourceNode": "vector-1", "sourcePort": "documents", "targetNode": "prompt-1", "targetPort": "documents" },
-    { "id": "l4", "sourceNode": "prompt-1", "sourcePort": "prompt", "targetNode": "llm-1", "targetPort": "prompt" }
+    { "id": "l1", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "prompt-1", "targetPort": "input" },
+    { "id": "l2", "sourceNode": "prompt-1", "sourcePort": "prompt", "targetNode": "llm-1", "targetPort": "prompt" },
+    { "id": "l3", "sourceNode": "llm-1", "sourcePort": "completion", "targetNode": "output-1", "targetPort": "input" }
   ]
 }
 
 CRITICAL RULES:
-1. STRICT CONSTRAINT: You are allowed at most ONE connection/link between any two nodes. Multiple links between the same two nodes are strictly forbidden. If you need to map multiple ports, remember that only one physical connection can exist between those two nodes in the visual studio graph.
-2. In prompt template variables, the first variable (e.g. {{brief}} or {{query}}) must connect from input-1, while retrieval context (e.g. {{documents}}) must connect from vector-1.
+1. Keep duplicate links out. One exact source-port to target-port link is enough, but different ports between the same nodes are allowed.
+2. Use simple input -> prompt -> llm -> output flows unless the user clearly asks for retrieval or database context.
 Be helpful, professional, and explain what the generated workflow does.`;
 
+    let timeoutId = null;
     try {
-      const activeProvider = runtime.providers[0];
+      const activeProvider = pickBestProvider(runtime, "completion");
+      const providerType = normalizeProviderType(activeProvider) || "openai";
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), 45000);
       const response = await fetch(`${API_BASE}/llm/stream`, {
         method: "POST",
+        signal: controller.signal,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          provider: activeProvider?.id || "openai",
-          model: "gpt-4o-mini",
+          provider: providerType,
+          model: activeProvider?.model || defaultModelForProvider(providerType, "completion"),
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: queryText }
           ],
-          runtime: {
-            providers: Object.fromEntries(runtime.providers.map((p) => [p.id, p])),
-            vectorDatabase: runtime.databases[0] || {}
-          }
+          runtime: buildExecutionRuntime(nodes, runtime)
         })
       });
+      clearTimeout(timeoutId);
+      if (!response.ok) {
+        const message = await readErrorMessage(response);
+        setLastExecutionIssue({
+          code: message.toLowerCase().includes("api key") ? "missing_provider_key" : message.toLowerCase().includes("connection string") ? "missing_vector_db" : "runtime_error",
+          label: "Workflow",
+          message
+        });
+        throw new Error(message);
+      }
 
       if (!response.body) {
+        setLastExecutionIssue({ code: "runtime_error", label: "Workflow", message: "Copilot stream is not available." });
         setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: "Error: Copilot stream is not available.", isStreaming: false } : m));
         setChatLoading(false);
         return;
@@ -1082,8 +1475,11 @@ Be helpful, professional, and explain what the generated workflow does.`;
 
     } catch (err) {
       console.error(err);
-      setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: "❌ Connection error while contacting Copilot. Ensure an active provider is added in Settings.", isStreaming: false } : m));
+      const message = err?.name === "AbortError" ? "Copilot timed out." : (err?.message || "Copilot error.");
+      setLastExecutionIssue({ code: "runtime_error", label: "Workflow", message });
+      setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: `Error: ${message}`, isStreaming: false } : m));
     } finally {
+      if (timeoutId) clearTimeout(timeoutId);
       setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, isStreaming: false } : m));
       setChatLoading(false);
       
@@ -1111,6 +1507,42 @@ Be helpful, professional, and explain what the generated workflow does.`;
     anchor.download = "promptflow-pipeline.js";
     anchor.click();
     URL.revokeObjectURL(url);
+  }
+
+  const authScreen = (
+    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "24px", background: "linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%)" }}>
+      <div style={{ width: "min(520px, 100%)", background: "#fff", border: "1px solid var(--border)", borderRadius: "20px", boxShadow: "0 24px 80px rgba(15, 23, 42, 0.12)", padding: "28px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "18px" }}>
+          <KeyRound size={18} />
+          <strong>PromptFlow Login</strong>
+        </div>
+        <p style={{ margin: "0 0 18px", color: "var(--muted)", fontSize: "13px", lineHeight: "1.5" }}>
+          Simple local login. No cloud. No big rig.
+        </p>
+        <div style={{ display: "flex", gap: "8px", marginBottom: "18px" }}>
+          <button className={authMode === "create" ? "primary" : "ghost"} onClick={() => setAuthMode("create")} style={{ flex: 1 }}>Create account</button>
+          <button className={authMode === "login" ? "primary" : "ghost"} onClick={() => setAuthMode("login")} style={{ flex: 1 }}>Login</button>
+        </div>
+        <div className="form-stack">
+          <label>Username
+            <input value={authForm.username} onChange={(e) => setAuthForm((prev) => ({ ...prev, username: e.target.value }))} placeholder="Your name" />
+          </label>
+          <label>Password
+            <input type="password" value={authForm.password} onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))} placeholder="Your password" />
+          </label>
+        </div>
+        {authError && <p style={{ marginTop: "10px", color: "var(--red)", fontSize: "12px" }}>{authError}</p>}
+        <div style={{ display: "flex", gap: "8px", marginTop: "18px" }}>
+          <button className="primary" onClick={submitAuth} style={{ flex: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+            <LogIn size={15} /> {authMode === "create" ? "Make account" : "Enter"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (!sessionUser?.username) {
+    return authScreen;
   }
 
   return (
@@ -1397,6 +1829,32 @@ Be helpful, professional, and explain what the generated workflow does.`;
           <span>Inspector</span>
           <h2>{selectedLink ? "Connection" : selectedNode?.label || "Workspace"}</h2>
         </div>
+
+        {lastExecutionIssue && fixGuide && (
+          <div style={{ marginBottom: "16px", padding: "12px", border: "1px solid #fecaca", borderRadius: "12px", background: "#fff7f7" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "start", marginBottom: "10px" }}>
+              <div>
+                <strong style={{ display: "block", fontSize: "13px" }}>{fixGuide.title}</strong>
+                <span style={{ fontSize: "11px", color: "var(--muted)" }}>{lastExecutionIssue.label || "Workflow"}</span>
+              </div>
+              <button
+                className="primary"
+                onClick={() => {
+                  setActiveView("settings");
+                  setSettingsFocus({ category: fixGuide.focus || "providers", ts: Date.now() });
+                }}
+                style={{ whiteSpace: "nowrap" }}
+              >
+                Quick Fix
+              </button>
+            </div>
+            <p style={{ margin: "0 0 8px", fontSize: "12px", lineHeight: "1.5", color: "var(--text)" }}>{lastExecutionIssue.message || "Run failed."}</p>
+            <ol style={{ margin: "0 0 0 18px", padding: 0, fontSize: "12px", lineHeight: "1.6", color: "var(--text)" }}>
+              {fixGuide.steps.map((step) => <li key={step}>{step}</li>)}
+            </ol>
+            <div style={{ marginTop: "10px", fontSize: "11px", color: "var(--muted)" }}>{fixGuide.action}</div>
+          </div>
+        )}
         
         {selectedLink && (
           <div className="connection-inspector">
@@ -1415,7 +1873,12 @@ Be helpful, professional, and explain what the generated workflow does.`;
             
             {selectedNode.type === "prompt" && (
               <>
-                <label>Template<textarea value={selectedNode.data.template || ""} onChange={(event) => updateSelectedData("template", event.target.value)} /></label>
+                <label>Template<textarea value={selectedNode.data.template || ""} placeholder="Enter your prompt here. Blank is okay." onChange={(event) => updateSelectedData("template", event.target.value)} /></label>
+                {!selectedNode.data.template?.trim() && (
+                  <div style={{ marginTop: "8px", padding: "10px 12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid var(--border)", fontSize: "12px", lineHeight: "1.5", color: "var(--muted)" }}>
+                    Prompt empty now. That is okay. LLM will use input text and you can type anything here later.
+                  </div>
+                )}
                 <div className="chips">{scanTemplateVariables(selectedNode.data.template).map((item) => <span key={item}>{`{{${item}}}`}</span>)}</div>
               </>
             )}
@@ -1508,6 +1971,7 @@ Be helpful, professional, and explain what the generated workflow does.`;
                   ) : (
                     <select value={selectedNode.data.provider || ""} onChange={(event) => updateSelectedData("provider", event.target.value)}>
                       <option value="">Select an Embedding Provider</option>
+                      <option value="mongodb">MongoDB Embeddings</option>
                       {runtime.providers?.map((p) => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
@@ -1515,7 +1979,7 @@ Be helpful, professional, and explain what the generated workflow does.`;
                   )}
                 </label>
 
-                {runtime.providers?.length > 0 && (
+                {(selectedNode.data.provider === "mongodb" || runtime.providers?.length > 0) && (
                   <>
                     <label>Embedding Model
                       {nodeLoadingModels ? (
@@ -1866,6 +2330,10 @@ Be helpful, professional, and explain what the generated workflow does.`;
           logs={executionLog}
           runtime={runtime}
           setRuntime={setRuntime}
+          onSaveRuntime={saveRuntimeNow}
+          onResetRuntime={resetRuntime}
+          runtimeSaveStatus={runtimeSaveStatus}
+          settingsFocus={settingsFocus}
           onOpenIde={() => setActiveView("ide")}
           onCreateNewAgent={createNewAgent}
           onApplyTemplate={applyTemplate}
@@ -1878,11 +2346,21 @@ Be helpful, professional, and explain what the generated workflow does.`;
   );
 }
 
-function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onOpenIde, onCreateNewAgent, onApplyTemplate, savedFlows, loadGraphById, deleteGraphById }) {
+function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onSaveRuntime, onResetRuntime, runtimeSaveStatus, settingsFocus, onOpenIde, onCreateNewAgent, onApplyTemplate, savedFlows, loadGraphById, deleteGraphById }) {
   const [selectedItem, setSelectedItem] = useState({ category: "providers", id: "openai" });
   const [modelCatalog, setModelCatalog] = useState({ models: [], recommendation: "" });
   const [loadingModels, setLoadingModels] = useState(false);
   const [dbInfo, setDbInfo] = useState({ suggested_setup: "" });
+
+  useEffect(() => {
+    if (!settingsFocus?.category) return;
+    const list = runtime[settingsFocus.category] || [];
+    if (list.length > 0) {
+      setSelectedItem({ category: settingsFocus.category, id: list[0].id });
+    } else {
+      setSelectedItem({ category: settingsFocus.category, id: settingsFocus.category === "providers" ? "openai" : "mongodb_atlas" });
+    }
+  }, [settingsFocus?.ts, settingsFocus?.category, runtime.providers, runtime.databases, runtime.caches]);
 
   const categoryList = runtime[selectedItem.category] || [];
   const activeResource = categoryList.find(item => item.id === selectedItem.id) || categoryList[0] || null;
@@ -2080,7 +2558,12 @@ function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onOpen
     <main className="screen-main">
       <div className="screen-header">
         <div><span>Settings</span><h1>BYO Runtime</h1></div>
-        <button className="ghost" onClick={onOpenIde}><Bot size={15} /> Back to IDE</button>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <span style={{ fontSize: "11px", color: "var(--muted)" }}>{runtimeSaveStatus}</span>
+          <button className="ghost" onClick={onSaveRuntime}><Save size={15} /> Save</button>
+          <button className="ghost" onClick={onResetRuntime}>Reset</button>
+          <button className="ghost" onClick={onOpenIde}><Bot size={15} /> Back to IDE</button>
+        </div>
       </div>
 
       <div className="settings-split">
@@ -2513,7 +2996,7 @@ function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onOpen
       </div>
     </main>
   );
-}
+  }
 
 function FlowNode({ node, selected, hoverPort, onPointerDown, onSelect, onBeginLink, onDelete, nodeState, nodeOutput }) {
   const meta = nodeTypes.find((item) => item.type === node.type) || nodeTypes[0];

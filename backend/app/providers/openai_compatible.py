@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 
 import httpx
@@ -6,10 +7,20 @@ from app.models.graph import CompletionRequest
 
 
 class OpenAICompatibleProvider:
-    def __init__(self, base_url: str, api_key: str | None = None, app_title: str = "PromptFlow Studio"):
+    def __init__(self, base_url: str, api_key: str | None = None, app_title: str = "PromptFlow Studio", provider_name: str = "openai"):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.app_title = app_title
+        self.provider_name = provider_name.lower()
+
+    def _needs_key(self) -> bool:
+        return self.provider_name not in {"ollama", "lmstudio", "lm-studio"}
+
+    def _ensure_key(self) -> None:
+        if self._needs_key() and not self.api_key:
+            raise RuntimeError(
+                f"{self.provider_name} needs an API key in Settings before this workflow can run."
+            )
 
     def _headers(self) -> dict[str, str]:
         headers = {"content-type": "application/json"}
@@ -19,80 +30,142 @@ class OpenAICompatibleProvider:
         return headers
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
-        if not self.api_key:
-            import asyncio
-            prompt = request.messages[-1]["content"] if request.messages else ""
-            
-            # Check if user is asking to create/make/build an agent or workflow
-            if any(word in prompt.lower() for word in ["make", "create", "build", "generate", "setup", "design", "flow", "agent", "workflow"]):
-                simulated_response = """Here is a custom agent workflow I've designed for you:
-
-### News Aggregator Agent Workflow
-This pipeline contains:
-1. **User Query Input**: Captures search topic
-2. **Search Prompt Template**: Prepares search query formatting
-3. **LLM Search Mimic**: Simulates Google News search parsing
-4. **Aggregator Writer Sub-agent**: Formats raw findings into a beautiful top-10 list
-5. **Output**: Terminal display showcases the aggregated report
-
-```json
-{
-  "nodes": [
-    { "id": "input-1", "type": "input", "label": "Search Topic", "position": {"x": 60, "y": 140}, "inputs": [], "outputs": [{"id": "value", "label": "value"}], "data": {"key": "topic", "value": "Google AI news"} },
-    { "id": "prompt-1", "type": "prompt", "label": "Search Prompt", "position": {"x": 320, "y": 140}, "inputs": [{"id": "topic", "label": "topic"}], "outputs": [{"id": "prompt", "label": "prompt"}], "data": {"template": "Extract top 10 relevant news items for search query: {{topic}}"} },
-    { "id": "llm-search", "type": "llm", "label": "Google News Mimic", "position": {"x": 580, "y": 140}, "inputs": [{"id": "prompt", "label": "prompt"}], "outputs": [{"id": "completion", "label": "completion"}], "data": {"provider": "openai", "model": "gpt-4o-mini", "temperature": 0.2} },
-    { "id": "subagent-writer", "type": "subagent", "label": "Aggregator Writer", "position": {"x": 840, "y": 140}, "inputs": [{"id": "task", "label": "task"}, {"id": "context", "label": "context"}], "outputs": [{"id": "result", "label": "result"}], "data": {"role": "Technical Writer", "handoff": "Organize these news details into a beautiful top-10 list."} },
-    { "id": "output-1", "type": "output", "label": "Aggregated Report", "position": {"x": 1100, "y": 140}, "inputs": [{"id": "input", "label": "input"}], "outputs": [], "data": {} }
-  ],
-  "links": [
-    { "id": "l1", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "prompt-1", "targetPort": "topic" },
-    { "id": "l2", "sourceNode": "prompt-1", "sourcePort": "prompt", "targetNode": "llm-search", "targetPort": "prompt" },
-    { "id": "l3", "sourceNode": "llm-search", "sourcePort": "completion", "targetNode": "subagent-writer", "targetPort": "context" },
-    { "id": "l4", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "subagent-writer", "targetPort": "task" },
-    { "id": "l5", "sourceNode": "subagent-writer", "sourcePort": "result", "targetNode": "output-1", "targetPort": "input" }
-  ]
-}
-```
-
-Click the **'Load Workflow into Canvas'** button below to automatically load these nodes and connections into your drag-and-drop workspace!"""
-            else:
-                simulated_response = f"[Simulated Local Response]\nBased on the input: '{prompt[:60]}...'\nThe execution completed successfully! This simulated response is generated locally because no API key was configured for this provider in the hosted Settings."
-            
-            for token in simulated_response.split(" "):
-                yield token + " "
-                await asyncio.sleep(0.04)
-            return
+        self._ensure_key()
 
         payload = request.model_dump(exclude={"provider", "runtime"})
         payload["stream"] = True
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", f"{self.base_url}/chat/completions", headers=self._headers(), json=payload) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line.removeprefix("data:").strip()
-                    if data == "[DONE]":
+        
+        max_retries = 3
+        backoff = 1.0
+        tokens_yielded = False
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    async with client.stream("POST", f"{self.base_url}/chat/completions", headers=self._headers(), json=payload) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            data = line.removeprefix("data:").strip()
+                            if data == "[DONE]":
+                                break
+                            try:
+                                import json
+                                chunk_data = json.loads(data)
+                                delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                                if "content" in delta:
+                                    tokens_yielded = True
+                                    yield delta["content"]
+                            except Exception:
+                                pass
+                        
+                        # Stream completed successfully
                         break
-                    try:
-                        import json
-                        chunk_data = json.loads(data)
-                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                        if "content" in delta:
-                            yield delta["content"]
-                    except Exception:
-                        pass
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                is_transient = status in {408, 429, 502, 503, 504}
+                
+                # If we've already yielded tokens, or it's the last attempt, or it's not a transient error, propagate
+                if tokens_yielded or attempt == max_retries or not is_transient:
+                    provider_name = self.provider_name.upper()
+                    if status == 504:
+                        raise RuntimeError(
+                            f"The upstream LLM provider ({provider_name}) took too long to respond (504 Gateway Timeout). "
+                            "This usually means the model server is currently overloaded or undergoing maintenance. Please try again in a few moments."
+                        ) from exc
+                    elif status == 429:
+                        raise RuntimeError(
+                            f"Rate limit exceeded (429) for upstream LLM provider ({provider_name}). "
+                            "Please reduce request frequency or check your API key usage limits."
+                        ) from exc
+                    elif status == 503:
+                        raise RuntimeError(
+                            f"The upstream LLM provider ({provider_name}) is temporarily unavailable (503 Service Unavailable). "
+                            "Please try again shortly."
+                        ) from exc
+                    elif status == 502:
+                        raise RuntimeError(
+                            f"Bad Gateway (502) encountered while contacting upstream LLM provider ({provider_name}). "
+                            "Please try again."
+                        ) from exc
+                    else:
+                        raise RuntimeError(
+                            f"LLM provider ({provider_name}) returned error status {status}: {exc.response.text or str(exc)}"
+                        ) from exc
+                
+                # Exponential backoff
+                await asyncio.sleep(backoff)
+                backoff *= 2.0
+                
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if tokens_yielded or attempt == max_retries:
+                    raise RuntimeError(
+                        f"Network timeout or connectivity issue while calling upstream LLM provider ({self.provider_name.upper()}). "
+                        "Please verify your internet connection or try again."
+                    ) from exc
+                
+                await asyncio.sleep(backoff)
+                backoff *= 2.0
 
 
     async def complete(self, request: CompletionRequest) -> str:
-        if not self.api_key:
-            prompt = request.messages[-1]["content"] if request.messages else ""
-            return f"[Simulated Local Response]\nBased on the input: '{prompt[:60]}...'\nThe execution completed successfully! This simulated response is generated locally because no API key was configured for this provider in the hosted Settings."
+        self._ensure_key()
 
         payload = request.model_dump(exclude={"provider", "runtime"})
         payload["stream"] = False
-        async with httpx.AsyncClient(timeout=90) as client:
-            response = await client.post(f"{self.base_url}/chat/completions", headers=self._headers(), json=payload)
-            response.raise_for_status()
-            data = response.json()
-        return data["choices"][0]["message"]["content"]
+        
+        max_retries = 3
+        backoff = 1.0
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=90) as client:
+                    response = await client.post(f"{self.base_url}/chat/completions", headers=self._headers(), json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    return data["choices"][0]["message"]["content"]
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                is_transient = status in {408, 429, 502, 503, 504}
+                
+                if attempt == max_retries or not is_transient:
+                    provider_name = self.provider_name.upper()
+                    if status == 504:
+                        raise RuntimeError(
+                            f"The upstream LLM provider ({provider_name}) took too long to respond (504 Gateway Timeout). "
+                            "This usually means the model server is currently overloaded or undergoing maintenance. Please try again in a few moments."
+                        ) from exc
+                    elif status == 429:
+                        raise RuntimeError(
+                            f"Rate limit exceeded (429) for upstream LLM provider ({provider_name}). "
+                            "Please reduce request frequency or check your API key usage limits."
+                        ) from exc
+                    elif status == 503:
+                        raise RuntimeError(
+                            f"The upstream LLM provider ({provider_name}) is temporarily unavailable (503 Service Unavailable). "
+                            "Please try again shortly."
+                        ) from exc
+                    elif status == 502:
+                        raise RuntimeError(
+                            f"Bad Gateway (502) encountered while contacting upstream LLM provider ({provider_name}). "
+                            "Please try again."
+                        ) from exc
+                    else:
+                        raise RuntimeError(
+                            f"LLM provider ({provider_name}) returned error status {status}: {exc.response.text or str(exc)}"
+                        ) from exc
+                
+                await asyncio.sleep(backoff)
+                backoff *= 2.0
+                
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if attempt == max_retries:
+                    raise RuntimeError(
+                        f"Network timeout or connectivity issue while calling upstream LLM provider ({self.provider_name.upper()}). "
+                        "Please verify your internet connection or try again."
+                    ) from exc
+                
+                await asyncio.sleep(backoff)
+                backoff *= 2.0
+

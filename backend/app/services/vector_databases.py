@@ -8,8 +8,8 @@ from app.models.graph import VectorDatabaseRuntime
 
 async def search_vector_database(config: VectorDatabaseRuntime, embedding: list[float], limit: int) -> list[dict[str, Any]]:
     kind = config.kind.lower()
-    if not config.connectionString and kind == "mongodb_atlas":
-        return [{"text": "Add a BYO MongoDB Atlas connection string in Settings to run live vector search.", "score": 0.0}]
+    if not config.connectionString:
+        raise RuntimeError(f"{kind} needs a connection string in Settings before this workflow can run.")
     if kind == "mongodb_atlas":
         return await _mongodb_vector_search(config, embedding, limit)
     if kind == "qdrant":

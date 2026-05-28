@@ -7,10 +7,12 @@ class GeminiProvider:
     def __init__(self, api_key: str | None):
         self.api_key = api_key
 
-    async def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
+    def _ensure_key(self) -> None:
         if not self.api_key:
-            yield "Gemini API key is not configured."
-            return
+            raise RuntimeError("gemini needs an API key in Settings before this workflow can run.")
+
+    async def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
+        self._ensure_key()
         from google import genai
 
         client = genai.Client(api_key=self.api_key)
@@ -21,6 +23,7 @@ class GeminiProvider:
                 yield chunk.text
 
     async def complete(self, request: CompletionRequest) -> str:
+        self._ensure_key()
         chunks = []
         async for chunk in self.stream(request):
             chunks.append(chunk)

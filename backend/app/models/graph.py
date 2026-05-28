@@ -45,11 +45,15 @@ class GraphDocument(BaseModel):
 
 
 class ProviderRuntime(BaseModel):
+    id: str | None = None
+    name: str | None = None
+    providerType: str | None = None
     apiKey: str | None = None
     baseUrl: str | None = None
 
 
 class VectorDatabaseRuntime(BaseModel):
+    id: str | None = None
     kind: str = "mongodb_atlas"
     connectionString: str | None = None
     database: str = "promptflow_studio"
@@ -63,6 +67,7 @@ class VectorDatabaseRuntime(BaseModel):
 
 class RuntimeConfig(BaseModel):
     providers: dict[str, ProviderRuntime] = Field(default_factory=dict)
+    databases: list[VectorDatabaseRuntime] = Field(default_factory=list)
     vectorDatabase: VectorDatabaseRuntime = Field(default_factory=VectorDatabaseRuntime)
 
 

@@ -61,13 +61,22 @@ export function filterDuplicateLinks(links = []) {
   const seen = new Set();
   return links.filter((link) => {
     if (!link.sourceNode || !link.targetNode) return true;
-    const pair = [link.sourceNode, link.targetNode].sort().join("---");
-    if (seen.has(pair)) {
+    const key = linkSignature(link);
+    if (seen.has(key)) {
       return false;
     }
-    seen.add(pair);
+    seen.add(key);
     return true;
   });
+}
+
+export function linkSignature(link) {
+  return [
+    link.sourceNode || "",
+    link.sourcePort || "",
+    link.targetNode || "",
+    link.targetPort || ""
+  ].join("::");
 }
 
 
