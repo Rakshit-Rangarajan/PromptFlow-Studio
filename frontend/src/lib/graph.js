@@ -1,0 +1,91 @@
+export const NODE_SIZE = { width: 292, header: 58, row: 28 };
+
+export function scanTemplateVariables(template = "") {
+  const variables = new Set();
+  const pattern = /\{\{\s*([a-zA-Z_$][\w$.-]*)\s*\}\}/g;
+  let match;
+  while ((match = pattern.exec(template))) variables.add(match[1]);
+  return [...variables];
+}
+
+export function withPromptPorts(node) {
+  if (node.type !== "prompt") return node;
+  const variables = scanTemplateVariables(node.data.template);
+  const inputs = variables.map((name) => ({ id: name, label: name }));
+  return { ...node, inputs };
+}
+
+export function normalizeNodes(nodes) {
+  return nodes.map(withPromptPorts);
+}
+
+export function portPosition(node, portId, side) {
+  const ports = side === "input" ? node.inputs : node.outputs;
+  const index = Math.max(0, ports.findIndex((port) => port.id === portId));
+  const top = NODE_SIZE.header + 27 + index * NODE_SIZE.row;
+  return {
+    x: node.position.x + (side === "input" ? 0 : NODE_SIZE.width),
+    y: node.position.y + top
+  };
+}
+
+export function bezierPath(source, target) {
+  const distance = Math.hypot(target.x - source.x, target.y - source.y);
+  const forward = Math.min(220, Math.max(72, distance * 0.38));
+  const verticalBias = Math.max(-80, Math.min(80, (target.y - source.y) * 0.12));
+  return [
+    `M ${source.x} ${source.y}`,
+    `C ${source.x + forward} ${source.y + verticalBias}`,
+    `${target.x - forward} ${target.y - verticalBias}`,
+    `${target.x} ${target.y}`
+  ].join(" ");
+}
+
+export function wouldCreateCycle(nodes, links, candidate) {
+  const nextLinks = candidate ? [...links, candidate] : links;
+  const graph = new Map(nodes.map((node) => [node.id, []]));
+  for (const link of nextLinks) graph.get(link.sourceNode)?.push(link.targetNode);
+  const colors = new Map(nodes.map((node) => [node.id, 0]));
+
+  function visit(nodeId) {
+    colors.set(nodeId, 1);
+    for (const child of graph.get(nodeId) || []) {
+      if (colors.get(child) === 1) return true;
+      if (colors.get(child) === 0 && visit(child)) return true;
+    }
+    colors.set(nodeId, 2);
+    return false;
+  }
+
+  return nodes.some((node) => colors.get(node.id) === 0 && visit(node.id));
+}
+
+export function topologicalOrder(nodes, links) {
+  const indegree = new Map(nodes.map((node) => [node.id, 0]));
+  const graph = new Map(nodes.map((node) => [node.id, []]));
+  for (const link of links) {
+    graph.get(link.sourceNode)?.push(link.targetNode);
+    indegree.set(link.targetNode, (indegree.get(link.targetNode) || 0) + 1);
+  }
+  const queue = nodes.filter((node) => indegree.get(node.id) === 0).map((node) => node.id);
+  const ordered = [];
+  while (queue.length) {
+    const current = queue.shift();
+    ordered.push(current);
+    for (const child of graph.get(current) || []) {
+      indegree.set(child, indegree.get(child) - 1);
+      if (indegree.get(child) === 0) queue.push(child);
+    }
+  }
+  if (ordered.length !== nodes.length) throw new Error("Graph contains a cycle.");
+  return ordered;
+}
+
+export function buildGraphPayload(name, nodes, links) {
+  return {
+    name,
+    nodes: normalizeNodes(nodes),
+    links: links.filter((link) => !link.invalid),
+    version: 1
+  };
+}

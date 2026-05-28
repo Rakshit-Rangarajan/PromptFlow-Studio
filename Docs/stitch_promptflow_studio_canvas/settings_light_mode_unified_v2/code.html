@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>PromptStudio - Unified Settings</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&amp;family=Geist:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-tertiary-fixed-variant": "#7a3000",
+                    "on-error": "#ffffff",
+                    "error-container": "#ffdad6",
+                    "surface-dim": "#dadada",
+                    "on-error-container": "#93000a",
+                    "surface-container-high": "#e8e8e8",
+                    "secondary": "#006e28",
+                    "tertiary-container": "#c25100",
+                    "on-tertiary-fixed": "#341000",
+                    "error": "#ba1a1a",
+                    "on-secondary-container": "#00732a",
+                    "outline-variant": "#c1c6d6",
+                    "surface-container-highest": "#e2e2e2",
+                    "surface": "#f9f9f9",
+                    "primary-container": "#0071e3",
+                    "surface-container-lowest": "#ffffff",
+                    "primary": "#0059b5",
+                    "outline": "#717785",
+                    "tertiary": "#9b3f00",
+                    "surface-bright": "#f9f9f9",
+                    "secondary-fixed-dim": "#53e16f",
+                    "tertiary-fixed-dim": "#ffb693",
+                    "surface-variant": "#e2e2e2",
+                    "on-background": "#1a1c1c",
+                    "surface-container": "#eeeeee",
+                    "background": "#f9f9f9",
+                    "tertiary-fixed": "#ffdbcb",
+                    "on-secondary": "#ffffff",
+                    "on-primary-fixed": "#001b3f",
+                    "surface-container-low": "#f3f3f3",
+                    "on-primary-container": "#fcfbff",
+                    "secondary-fixed": "#72fe88",
+                    "inverse-surface": "#2f3131",
+                    "inverse-on-surface": "#f0f1f1",
+                    "primary-fixed": "#d7e2ff",
+                    "on-surface-variant": "#414753",
+                    "on-tertiary-container": "#fffaf9",
+                    "primary-fixed-dim": "#abc7ff",
+                    "on-secondary-fixed": "#002107",
+                    "surface-tint": "#005cbb",
+                    "on-tertiary": "#ffffff",
+                    "on-secondary-fixed-variant": "#00531c",
+                    "on-primary-fixed-variant": "#00458f",
+                    "inverse-primary": "#abc7ff",
+                    "on-surface": "#1a1c1c",
+                    "secondary-container": "#6ffb85",
+                    "on-primary": "#ffffff"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "gutter": "16px",
+                    "base": "4px",
+                    "stack-gap": "12px",
+                    "margin-page": "32px",
+                    "panel-padding": "20px"
+            },
+            "fontFamily": {
+                    "code-sm": ["Geist"],
+                    "label-xs": ["Inter"],
+                    "headline-md": ["Inter"],
+                    "body-md": ["Inter"],
+                    "display-lg": ["Inter"]
+            },
+            "fontSize": {
+                    "code-sm": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "label-xs": ["11px", {"lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600"}],
+                    "headline-md": ["20px", {"lineHeight": "28px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "display-lg": ["32px", {"lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "600"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body {
+            background-color: #f9f9f9;
+            background-image: radial-gradient(#e5e5e7 0.5px, transparent 0.5px);
+            background-size: 16px 16px;
+            background-attachment: fixed;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="font-body-md text-on-surface">
+<!-- TopNavBar -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-margin-page h-16 bg-surface border-b border-outline-variant font-body-md text-body-md">
+<div class="flex items-center gap-8">
+<span class="font-headline-md text-headline-md font-extrabold text-on-surface tracking-tight">PromptStudio</span>
+<nav class="hidden md:flex items-center gap-6 h-16">
+<a class="text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-80" href="#">IDE</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-80" href="#">Flows</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors cursor-pointer active:opacity-80" href="#">Logs</a>
+<a class="text-primary border-b-2 border-primary pb-1 font-bold cursor-pointer active:opacity-80" href="#">Settings</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative group hidden sm:block">
+<span class="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-outline">search</span>
+<input class="pl-10 pr-4 py-1.5 bg-surface-container-low border border-outline-variant rounded text-body-md focus:outline-none focus:border-primary transition-all w-64" placeholder="Search parameters..." type="text"/>
+</div>
+<button class="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors cursor-pointer">notifications</button>
+<button class="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors cursor-pointer">help_outline</button>
+<button class="bg-primary text-on-primary px-4 py-1.5 rounded font-bold hover:bg-primary-container transition-all text-body-md">Deploy</button>
+<img alt="User profile" class="w-8 h-8 rounded-full border border-outline-variant" data-alt="A professional, high-resolution portrait of a modern software engineer in a bright, airy studio environment. The individual is wearing a clean white shirt, smiling warmly against a soft-focus background of a contemporary tech office. The lighting is natural and high-key, emphasizing a clean, minimalist, and approachable aesthetic aligned with premium design standards." src="https://lh3.googleusercontent.com/aida-public/AB6AXuC9VbpWLipO0kokAqFX15Po2OecWMhCPRxfVPTqpb4GRs4xK1TT0J70QMCy-7ymUT428EoOmOKgY6S-J_2DvzOaKJr0qhUfsz8HP-CBrUimk3kQVDSB-aAO0PeYTJ8v-u6-0FRNwehUQEBTrcbbkTi-BaL2V-1bpJ-HXdSmzTY-PI4q6VO-uqkTSFlDdk-aNeZLQbKmcy1wSlORcWd0U7H2LeGhjSNOjeXOdU-kPLThTj3xP-Is3FNI5GcLW5CpKzyKSn9eUKQ0zvI"/>
+</div>
+</header>
+<div class="flex min-h-screen pt-16">
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-16 bottom-0 w-64 flex flex-col bg-surface border-r border-outline-variant transition-all duration-200">
+<div class="p-6 flex items-center gap-3">
+<div class="w-10 h-10 bg-primary-container flex items-center justify-center rounded-lg">
+<span class="material-symbols-outlined text-on-primary-container" style="font-variation-settings: 'FILL' 1;">account_tree</span>
+</div>
+<div>
+<h2 class="font-label-xs text-label-xs text-on-surface font-bold uppercase tracking-widest">Logic Engine</h2>
+<p class="text-on-surface-variant text-[10px]">v2.4.0</p>
+</div>
+</div>
+<nav class="flex-1 px-4 space-y-1">
+<div class="text-on-surface-variant text-[10px] uppercase font-bold px-2 py-4 tracking-widest">Settings Sections</div>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded bg-surface-container-low text-primary font-bold transition-all duration-200 group" href="#">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">person</span>
+<span class="font-body-md text-body-md">Profile</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant hover:bg-surface-container-highest transition-all duration-200 group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary transition-colors">api</span>
+<span class="font-body-md text-body-md">API Configuration</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant hover:bg-surface-container-highest transition-all duration-200 group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary transition-colors">palette</span>
+<span class="font-body-md text-body-md">Appearance</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded text-on-surface-variant hover:bg-surface-container-highest transition-all duration-200 group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary transition-colors">workspaces</span>
+<span class="font-body-md text-body-md">Workspace</span>
+</a>
+</nav>
+<div class="px-4 py-6 border-t border-outline-variant">
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container-highest transition-all duration-200 group" href="#">
+<span class="material-symbols-outlined group-hover:text-primary transition-colors">contact_support</span>
+<span class="font-body-md text-body-md">Support</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="ml-64 flex-1 p-margin-page">
+<div class="max-w-4xl mx-auto">
+<header class="mb-10">
+<h1 class="font-display-lg text-display-lg text-on-surface mb-2">Profile</h1>
+<p class="text-on-surface-variant max-w-2xl">Manage your personal information, avatar, and public-facing bio. These details will be visible to your workspace collaborators.</p>
+</header>
+<!-- Bento-ish Layout -->
+<div class="grid grid-cols-12 gap-gutter">
+<!-- Avatar & Status Card -->
+<div class="col-span-12 lg:col-span-4 bg-surface-container-lowest border border-outline-variant p-panel-padding rounded-lg flex flex-col items-center justify-center gap-6">
+<div class="relative group cursor-pointer">
+<img alt="Avatar upload" class="w-32 h-32 rounded-full border-2 border-primary-container object-cover" data-alt="A clean, close-up shot of a human avatar placeholder in a minimalist style. The image features soft shadows and high-key lighting, set against a pristine white studio background. The aesthetic is ultra-professional, using a palette of soft grays and bright whites to evoke a sense of modern digital identity and premium user experience design." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBEdKaU_S2f2d2bt4--9P4OF7OnzCbbLGjMXo4uGv6dnnu9ewV7ZLI9YOXKDahC5bQt8ondWl4ykRBJ2otTkjV9go3fgzmYWceUyBZZICDIhrazC4N68tGybrXNxKo7OOoxl6ztDtIwtkOyGeRIIZz24FZ9QTYZ4bq8ez-v6uPy4UviCf3szykT8k3d183PIB7qldBfmBMZ8D1yZNcyjmCvVOvCbyBZ6UctxSeZ6FwD7pncE93ItTm9bpKJbvV2OIMIiWPevmu1bzA"/>
+<div class="absolute inset-0 bg-on-background/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+<span class="material-symbols-outlined text-surface text-3xl">photo_camera</span>
+</div>
+</div>
+<div class="text-center">
+<button class="text-primary font-bold text-body-md hover:underline">Change Photo</button>
+<p class="text-label-xs text-on-surface-variant mt-2">JPG, GIF or PNG. Max 2MB.</p>
+</div>
+<div class="w-full border-t border-outline-variant pt-4 mt-2">
+<div class="flex items-center justify-between mb-2">
+<span class="text-label-xs text-on-surface-variant uppercase font-bold tracking-widest">Account Status</span>
+<span class="bg-secondary-container text-on-secondary-fixed-variant px-2 py-0.5 rounded text-[10px] font-bold uppercase">Pro Plan</span>
+</div>
+<div class="h-1.5 w-full bg-surface-container rounded-full overflow-hidden">
+<div class="h-full bg-primary w-[72%]"></div>
+</div>
+<p class="text-[10px] text-on-surface-variant mt-2">Storage used: 14.4 GB of 20 GB</p>
+</div>
+</div>
+<!-- Personal Info Form -->
+<div class="col-span-12 lg:col-span-8 bg-surface-container-lowest border border-outline-variant p-panel-padding rounded-lg">
+<h3 class="font-headline-md text-headline-md text-on-surface mb-6">Personal Details</h3>
+<form class="space-y-6">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-stack-gap">
+<div class="space-y-2">
+<label class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-widest">First Name</label>
+<input class="w-full bg-surface border border-outline-variant px-4 py-2.5 rounded focus:outline-none focus:border-primary focus:ring-0 transition-all font-body-md" type="text" value="Alexander"/>
+</div>
+<div class="space-y-2">
+<label class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-widest">Last Name</label>
+<input class="w-full bg-surface border border-outline-variant px-4 py-2.5 rounded focus:outline-none focus:border-primary focus:ring-0 transition-all font-body-md" type="text" value="Vance"/>
+</div>
+</div>
+<div class="space-y-2">
+<label class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-widest">Email Address</label>
+<div class="relative">
+<input class="w-full bg-surface-container-low border border-outline-variant px-4 py-2.5 rounded font-body-md text-on-surface-variant cursor-not-allowed" readonly="" type="email" value="alexander.vance@promptstudio.io"/>
+<span class="absolute right-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-outline text-sm">lock</span>
+</div>
+</div>
+<div class="space-y-2">
+<label class="font-label-xs text-label-xs text-on-surface-variant uppercase tracking-widest">Professional Bio</label>
+<textarea class="w-full bg-surface border border-outline-variant px-4 py-2.5 rounded focus:outline-none focus:border-primary focus:ring-0 transition-all font-body-md" placeholder="Tell colleagues about your role and expertise..." rows="4">Prompt Engineer specializing in LLM orchestration and logic-gated flows. Building the future of automated decision systems at Studio 42.</textarea>
+</div>
+<div class="flex items-center justify-end gap-4 pt-4">
+<button class="px-6 py-2 border border-outline-variant text-primary font-bold rounded hover:bg-surface-container transition-all text-body-md" type="button">Discard</button>
+<button class="px-6 py-2 bg-primary text-on-primary font-bold rounded hover:bg-primary-container transition-all text-body-md shadow-sm" type="submit">Save Changes</button>
+</div>
+</form>
+</div>
+<!-- Notification Preferences (Secondary Card) -->
+<div class="col-span-12 bg-surface-container-lowest border border-outline-variant p-panel-padding rounded-lg">
+<div class="flex items-center justify-between mb-8">
+<div>
+<h3 class="font-headline-md text-headline-md text-on-surface">Experience Preferences</h3>
+<p class="text-body-md text-on-surface-variant">Customize how you interact with the Logic Engine workspace.</p>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<div class="p-4 border border-outline-variant rounded bg-surface hover:border-primary transition-all cursor-pointer flex flex-col gap-3 group">
+<span class="material-symbols-outlined text-primary">notifications_active</span>
+<div class="font-bold text-on-surface">Real-time Updates</div>
+<p class="text-label-xs text-on-surface-variant">Push notifications for model completion and error logs.</p>
+<div class="mt-auto flex justify-end">
+<div class="w-10 h-5 bg-primary rounded-full relative">
+<div class="absolute right-1 top-1 w-3 h-3 bg-white rounded-full"></div>
+</div>
+</div>
+</div>
+<div class="p-4 border border-outline-variant rounded bg-surface hover:border-primary transition-all cursor-pointer flex flex-col gap-3 group">
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">history</span>
+<div class="font-bold text-on-surface">Auto-Save History</div>
+<p class="text-label-xs text-on-surface-variant">Automatically snapshot every prompt iteration and node change.</p>
+<div class="mt-auto flex justify-end">
+<div class="w-10 h-5 bg-primary rounded-full relative">
+<div class="absolute right-1 top-1 w-3 h-3 bg-white rounded-full"></div>
+</div>
+</div>
+</div>
+<div class="p-4 border border-outline-variant rounded bg-surface hover:border-primary transition-all cursor-pointer flex flex-col gap-3 group">
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">visibility</span>
+<div class="font-bold text-on-surface">Ghost Mode</div>
+<p class="text-label-xs text-on-surface-variant">Hide your active status from other workspace members.</p>
+<div class="mt-auto flex justify-end">
+<div class="w-10 h-5 bg-outline-variant rounded-full relative">
+<div class="absolute left-1 top-1 w-3 h-3 bg-white rounded-full"></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Security Section (Mini-Bento Bottom) -->
+<div class="col-span-12 lg:col-span-7 bg-surface-container-lowest border border-outline-variant p-panel-padding rounded-lg">
+<h3 class="font-headline-md text-headline-md text-on-surface mb-4">Security</h3>
+<div class="space-y-4">
+<div class="flex items-center justify-between p-4 bg-surface rounded border border-outline-variant">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-on-surface-variant">key</span>
+<div>
+<div class="font-bold">Two-Factor Authentication</div>
+<p class="text-label-xs text-on-surface-variant">Added layer of security for your account.</p>
+</div>
+</div>
+<button class="text-primary text-label-xs font-bold uppercase tracking-wider">Enable</button>
+</div>
+<div class="flex items-center justify-between p-4 bg-surface rounded border border-outline-variant">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-on-surface-variant">devices</span>
+<div>
+<div class="font-bold">Active Sessions</div>
+<p class="text-label-xs text-on-surface-variant">2 devices currently logged in.</p>
+</div>
+</div>
+<button class="text-on-surface-variant text-label-xs font-bold uppercase tracking-wider hover:text-primary">Manage</button>
+</div>
+</div>
+</div>
+<div class="col-span-12 lg:col-span-5 bg-error-container/10 border border-error/20 p-panel-padding rounded-lg flex flex-col justify-between">
+<div>
+<h3 class="font-headline-md text-headline-md text-error mb-2">Danger Zone</h3>
+<p class="text-body-md text-on-surface-variant">Permanently delete your account and all associated workspace data. This action cannot be undone.</p>
+</div>
+<button class="w-full mt-6 py-2 border border-error text-error font-bold rounded hover:bg-error hover:text-white transition-all text-body-md">Delete Account</button>
+</div>
+</div>
+</div>
+</main>
+</div>
+<!-- Micro-interaction Script -->
+<script>
+        document.querySelectorAll('a').forEach(link => {
+            link.addEventListener('click', (e) => {
+                if (link.getAttribute('href') === '#') e.preventDefault();
+            });
+        });
+        
+        // Simple hover effect for inputs
+        const inputs = document.querySelectorAll('input, textarea');
+        inputs.forEach(input => {
+            input.addEventListener('focus', () => {
+                input.parentElement.querySelector('label')?.classList.add('text-primary');
+            });
+            input.addEventListener('blur', () => {
+                input.parentElement.querySelector('label')?.classList.remove('text-primary');
+            });
+        });
+    </script>
+</body></html>
