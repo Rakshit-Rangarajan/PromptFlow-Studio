@@ -30,9 +30,25 @@ export function portPosition(node, portId, side) {
 }
 
 export function bezierPath(source, target) {
-  const distance = Math.hypot(target.x - source.x, target.y - source.y);
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const distance = Math.hypot(dx, dy);
+  
   const forward = Math.min(220, Math.max(72, distance * 0.38));
-  const verticalBias = Math.max(-80, Math.min(80, (target.y - source.y) * 0.12));
+  const verticalBias = Math.max(-80, Math.min(80, dy * 0.12));
+  
+  // If the connection spans across an intermediate column (e.g. distance is wide and vertical diff is small),
+  // we add a beautiful vertical loop/dip to avoid passing directly through intermediate node cards!
+  if (dx > 400 && Math.abs(dy) < 120) {
+    const dip = 136; // Clear the 138px card height centered vertically
+    return [
+      `M ${source.x} ${source.y}`,
+      `C ${source.x + 100} ${source.y + dip}`,
+      `${target.x - 100} ${target.y + dip}`,
+      `${target.x} ${target.y}`
+    ].join(" ");
+  }
+
   return [
     `M ${source.x} ${source.y}`,
     `C ${source.x + forward} ${source.y + verticalBias}`,
@@ -40,6 +56,20 @@ export function bezierPath(source, target) {
     `${target.x} ${target.y}`
   ].join(" ");
 }
+
+export function filterDuplicateLinks(links = []) {
+  const seen = new Set();
+  return links.filter((link) => {
+    if (!link.sourceNode || !link.targetNode) return true;
+    const pair = [link.sourceNode, link.targetNode].sort().join("---");
+    if (seen.has(pair)) {
+      return false;
+    }
+    seen.add(pair);
+    return true;
+  });
+}
+
 
 export function wouldCreateCycle(nodes, links, candidate) {
   const nextLinks = candidate ? [...links, candidate] : links;

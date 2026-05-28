@@ -32,6 +32,7 @@ import {
 import {
   bezierPath,
   buildGraphPayload,
+  filterDuplicateLinks,
   normalizeNodes,
   portPosition,
   scanTemplateVariables,
@@ -182,30 +183,37 @@ const workflowTemplates = [
 ];
 
 const defaultRuntime = {
-  providers: [
-    { id: "openai", name: "OpenAI", providerType: "openai", apiKey: "", baseUrl: "https://api.openai.com/v1" },
-    { id: "nvidia", name: "NVIDIA NIM", providerType: "nvidia", apiKey: "", baseUrl: "https://integrate.api.nvidia.com/v1" },
-    { id: "gemini", name: "Google Gemini", providerType: "gemini", apiKey: "", baseUrl: "" },
-    { id: "openrouter", name: "OpenRouter", providerType: "openrouter", apiKey: "", baseUrl: "https://openrouter.ai/api/v1" },
-    { id: "ollama", name: "Ollama", providerType: "ollama", apiKey: "", baseUrl: "http://localhost:11434/v1" },
-    { id: "lmstudio", name: "LM Studio", providerType: "lmstudio", apiKey: "", baseUrl: "http://localhost:1234/v1" }
-  ],
-  databases: [
-    { id: "mongodb_atlas", name: "MongoDB Vector Search", kind: "mongodb_atlas", connectionString: "", database: "promptflow_studio", collection: "knowledge_base", index: "vector_index", apiKey: "" }
-  ],
+  providers: [],
+  databases: [],
   caches: [
     { id: "in_memory", name: "Local LRU Cache", kind: "in_memory", maxLimit: 1000, ttl: 300 }
   ]
 };
 
 function parseJsonWorkflow(text) {
+  if (!text) return null;
   try {
-    const match = text.match(/```json\s*([\s\S]*?)\s*```/);
+    // 1. Try markdown JSON codeblock first
+    const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
     if (match && match[1]) {
       const parsed = JSON.parse(match[1].trim());
-      if (parsed.nodes && parsed.links) {
-        return parsed;
-      }
+      if (parsed.nodes && parsed.links) return parsed;
+    }
+    
+    // 2. Try raw markdown codeblock
+    const matchRaw = text.match(/```\s*([\s\S]*?)\s*```/);
+    if (matchRaw && matchRaw[1]) {
+      const parsed = JSON.parse(matchRaw[1].trim());
+      if (parsed.nodes && parsed.links) return parsed;
+    }
+
+    // 3. Find first { and last } and try to parse it
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      const candidate = text.substring(start, end + 1);
+      const parsed = JSON.parse(candidate);
+      if (parsed.nodes && parsed.links) return parsed;
     }
   } catch (err) {}
   return null;
@@ -225,6 +233,11 @@ export function App() {
   ]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [nodeModelCatalog, setNodeModelCatalog] = useState({ models: [], recommendation: "" });
+  const [nodeLoadingModels, setNodeLoadingModels] = useState(false);
+  const [nodeDbInfo, setNodeDbInfo] = useState({ suggested_setup: "" });
+
+
 
   const fetchFlows = async () => {
     try {
@@ -251,7 +264,7 @@ export function App() {
         setGraphId(data.id);
         setGraphName(data.name || "Untitled Flow");
         setNodes(normalizeNodes(data.nodes || []));
-        setLinks(data.links || []);
+        setLinks(filterDuplicateLinks(data.links || []));
         setActiveView("ide");
         setStatus("Flow loaded successfully.");
       } else {
@@ -311,6 +324,55 @@ export function App() {
   const selectedNode = nodeMap.get(selectedId);
   const selectedLink = links.find((link) => link.id === selectedLinkId);
   const hasCycle = useMemo(() => wouldCreateCycle(graphNodes, links), [graphNodes, links]);
+
+  useEffect(() => {
+    if (selectedNode && (selectedNode.type === "llm" || selectedNode.type === "subagent" || selectedNode.type === "vector")) {
+      const activeProvId = selectedNode.data.provider || "openai";
+      const provConf = runtime.providers.find(p => p.id === activeProvId);
+      const isEmbedding = selectedNode.type === "vector";
+      
+      setNodeLoadingModels(true);
+      fetch(`${API_BASE}/runtime/models`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          providerType: provConf?.providerType || activeProvId,
+          baseUrl: provConf?.baseUrl || "",
+          apiKey: provConf?.apiKey || "",
+          mode: isEmbedding ? "embedding" : "completion"
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        setNodeModelCatalog(data);
+        setNodeLoadingModels(false);
+      })
+      .catch(() => {
+        setNodeLoadingModels(false);
+      });
+    }
+  }, [selectedNode?.id, selectedNode?.data?.provider, runtime.providers]);
+
+  useEffect(() => {
+    if (selectedNode && selectedNode.type === "vector") {
+      const activeDbId = selectedNode.data.vectorDatabase;
+      const dbConf = runtime.databases.find(db => db.id === activeDbId);
+      if (dbConf) {
+        fetch(`${API_BASE}/runtime/databases/info`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ kind: dbConf.kind })
+        })
+        .then(res => res.json())
+        .then(data => {
+          setNodeDbInfo(data);
+        })
+        .catch(() => {});
+      } else {
+        setNodeDbInfo({ suggested_setup: "" });
+      }
+    }
+  }, [selectedNode?.id, selectedNode?.data?.vectorDatabase, runtime.databases]);
 
   function toWorld(clientX, clientY) {
     const rect = canvasRef.current.getBoundingClientRect();
@@ -383,7 +445,13 @@ export function App() {
         targetPort: hoverPort.portId,
         active: false
       };
-      if (wouldCreateCycle(graphNodes, links, candidate)) {
+      const duplicateExists = links.some(link => 
+        (link.sourceNode === candidate.sourceNode && link.targetNode === candidate.targetNode) ||
+        (link.sourceNode === candidate.targetNode && link.targetNode === candidate.sourceNode)
+      );
+      if (duplicateExists) {
+        setStatus("Connection exists: only one link is allowed between the same two nodes.");
+      } else if (wouldCreateCycle(graphNodes, links, candidate)) {
         setLinks((current) => [...current, { ...candidate, invalid: true }]);
         setStatus("Cycle intercepted: execution locked until the red path is removed.");
       } else {
@@ -414,6 +482,130 @@ export function App() {
   function onWheel(event) {
     event.preventDefault();
     setZoom(viewport.scale * Math.exp(-event.deltaY * 0.001), event);
+  }
+
+  function fitContent(nodesList = nodes) {
+    if (!canvasRef.current || nodesList.length === 0) return;
+
+    // Calculate bounding box of all nodes
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    
+    nodesList.forEach(node => {
+      const x = node.position.x;
+      const y = node.position.y;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x + 240); // 240px estimated node width
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y + 160); // 160px estimated height
+    });
+
+    const graphWidth = maxX - minX;
+    const graphHeight = maxY - minY;
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    const viewWidth = rect.width;
+    const viewHeight = rect.height;
+
+    // Ideal scale with padding
+    const PADDING = 80;
+    const scaleX = (viewWidth - PADDING * 2) / graphWidth;
+    const scaleY = (viewHeight - PADDING * 2) / graphHeight;
+    let scale = Math.min(scaleX, scaleY);
+    
+    scale = Math.min(1.4, Math.max(0.35, scale));
+
+    // Center the bounding box in the viewport
+    const graphCenterX = minX + graphWidth / 2;
+    const graphCenterY = minY + graphHeight / 2;
+    
+    const x = viewWidth / 2 - graphCenterX * scale;
+    const y = viewHeight / 2 - graphCenterY * scale;
+
+    setViewport({ x, y, scale });
+    setStatus("Canvas fitted to content.");
+  }
+
+  function autoLayoutNodes() {
+    if (nodes.length === 0) return;
+
+    // 1. Calculate incoming links and predecessors for each node
+    const predecessorsMap = new Map();
+    nodes.forEach(node => {
+      predecessorsMap.set(node.id, []);
+    });
+    
+    links.forEach(link => {
+      if (predecessorsMap.has(link.targetNode)) {
+        predecessorsMap.get(link.targetNode).push(link.sourceNode);
+      }
+    });
+
+    // 2. Compute column/level for each node using topological depth
+    const columns = new Map();
+    const visited = new Set();
+    
+    function getDepth(nodeId) {
+      if (columns.has(nodeId)) return columns.get(nodeId);
+      if (visited.has(nodeId)) return 0; // Cycle safety
+      
+      visited.add(nodeId);
+      const preds = predecessorsMap.get(nodeId) || [];
+      if (preds.length === 0) {
+        columns.set(nodeId, 0);
+        visited.delete(nodeId);
+        return 0;
+      }
+      
+      let maxPredDepth = -1;
+      for (const pred of preds) {
+        maxPredDepth = Math.max(maxPredDepth, getDepth(pred));
+      }
+      const depth = maxPredDepth + 1;
+      columns.set(nodeId, depth);
+      visited.delete(nodeId);
+      return depth;
+    }
+
+    nodes.forEach(node => getDepth(node.id));
+
+    // 3. Group nodes by column
+    const columnGroups = {};
+    nodes.forEach(node => {
+      const col = columns.get(node.id) || 0;
+      if (!columnGroups[col]) columnGroups[col] = [];
+      columnGroups[col].push(node);
+    });
+
+    // 4. Update node positions left-to-right (horizontal flow)
+    const COLUMN_WIDTH = 420;
+    const ROW_HEIGHT = 220;
+    const START_X = 120;
+    const START_Y = 240;
+
+    const newNodes = nodes.map(node => {
+      const col = columns.get(node.id) || 0;
+      const group = columnGroups[col];
+      const index = group.indexOf(node);
+      const totalRows = group.length;
+      
+      // Perfectly aligned left-to-right, centered vertically
+      const x = START_X + col * COLUMN_WIDTH;
+      const y = START_Y + (index - (totalRows - 1) / 2) * ROW_HEIGHT;
+      
+      return {
+        ...node,
+        position: { x, y }
+      };
+    });
+
+    setNodes(normalizeNodes(newNodes));
+    setStatus("Nodes auto-aligned neatly.");
+    
+    // Auto-fit after tidy up to perfectly center the new clean graph
+    setTimeout(() => {
+      fitContent(newNodes);
+    }, 60);
   }
 
   function deleteSelectedLink() {
@@ -456,7 +648,7 @@ export function App() {
       base.outputs = [{ id: "result", label: "result" }];
       base.data = { role: "Specialist", handoff: "Return a concise result to the parent agent." };
     }
-    if (type === "vector") base.data = { collection: "knowledge_base", index: "vector_index", limit: 4 };
+    if (type === "vector") base.data = { collection: "knowledge_base", index: "vector_index", limit: 4, provider: "openai", model: "text-embedding-3-small" };
     if (type === "router") base.data = { condition: "len(input) > 10" };
     if (type === "code") base.data = { code: "output = input.upper()" };
     if (type === "custom") {
@@ -481,7 +673,7 @@ export function App() {
 
   function applyTemplate(template) {
     setNodes(normalizeNodes(template.nodes));
-    setLinks(template.links);
+    setLinks(filterDuplicateLinks(template.links));
     setSelectedId(template.nodes[0]?.id || null);
     setSelectedLinkId(null);
     setViewport({ x: 16, y: 30, scale: 0.52 });
@@ -660,23 +852,20 @@ export function App() {
   async function sendChatInput(queryText) {
     if (!queryText.trim()) return;
     
+    const isBuildRequest = /make|create|build|generate|setup|design|flow|agent|workflow/i.test(queryText);
+    const inputNode = nodes.find(n => n.type === "input");
+    
+    if (isBuildRequest || !inputNode) {
+      setChatMode("copilot");
+      sendCopilotInput(queryText);
+      return;
+    }
+    
     // Add user message
     const userMsg = { id: `user-${Date.now()}`, role: "user", text: queryText };
     setChatMessages((prev) => [...prev, userMsg]);
     setChatLoading(true);
     
-    // Find canvas input node
-    const inputNode = nodes.find(n => n.type === "input");
-    if (!inputNode) {
-      setChatMessages((prev) => [...prev, {
-        id: `err-${Date.now()}`,
-        role: "assistant",
-        text: "⚠️ **No Input Node found on the Canvas**: Please add an 'Input' node to your canvas so I can wire your message into the pipeline execution."
-      }]);
-      setChatLoading(false);
-      return;
-    }
-
     // Update input node value in state
     const updatedNodes = nodes.map(n => n.id === inputNode.id ? { ...n, data: { ...n.data, value: queryText } } : n);
     setNodes(normalizeNodes(updatedNodes));
@@ -820,15 +1009,22 @@ export function App() {
 You can generate nodes and connections. To create or modify a workflow, output a single JSON codeblock wrapped in \`\`\`json ... \`\`\` with this exact structure:
 {
   "nodes": [
-    { "id": "input-1", "type": "input", "label": "User Brief", "position": {"x": 60, "y": 140}, "inputs": [], "outputs": [{"id": "value", "label": "value"}], "data": {"key": "brief", "value": "Write a support ticket description."} },
-    { "id": "prompt-1", "type": "prompt", "label": "Prompt Template", "position": {"x": 320, "y": 140}, "inputs": [{"id": "input", "label": "input"}], "outputs": [{"id": "prompt", "label": "prompt"}], "data": {"template": "Summarize: {{brief}}"} },
-    { "id": "llm-1", "type": "llm", "label": "Model Response", "position": {"x": 580, "y": 140}, "inputs": [{"id": "prompt", "label": "prompt"}], "outputs": [{"id": "completion", "label": "completion"}], "data": {"provider": "openai", "model": "gpt-4o-mini"} }
+    { "id": "input-1", "type": "input", "label": "User Brief", "position": {"x": 60, "y": 240}, "inputs": [], "outputs": [{"id": "value", "label": "value"}], "data": {"key": "brief", "value": "What is the refund policy?"} },
+    { "id": "vector-1", "type": "vector", "label": "Semantic context", "position": {"x": 480, "y": 380}, "inputs": [{"id": "query", "label": "query"}], "outputs": [{"id": "documents", "label": "documents"}], "data": {"collection": "knowledge_base", "index": "vector_index", "limit": 4} },
+    { "id": "prompt-1", "type": "prompt", "label": "Prompt Template", "position": {"x": 900, "y": 240}, "inputs": [], "outputs": [{"id": "prompt", "label": "prompt"}], "data": {"template": "You are a precise support copilot. Use {{brief}} and {{documents}} to draft a concise response."} },
+    { "id": "llm-1", "type": "llm", "label": "Model Response", "position": {"x": 1320, "y": 240}, "inputs": [{"id": "prompt", "label": "prompt"}], "outputs": [{"id": "completion", "label": "completion"}], "data": {"provider": "openai", "model": "gpt-4o-mini"} }
   ],
   "links": [
-    { "id": "l1", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "prompt-1", "targetPort": "input" },
-    { "id": "l2", "sourceNode": "prompt-1", "sourcePort": "prompt", "targetNode": "llm-1", "targetPort": "prompt" }
+    { "id": "l1", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "prompt-1", "targetPort": "brief" },
+    { "id": "l2", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "vector-1", "targetPort": "query" },
+    { "id": "l3", "sourceNode": "vector-1", "sourcePort": "documents", "targetNode": "prompt-1", "targetPort": "documents" },
+    { "id": "l4", "sourceNode": "prompt-1", "sourcePort": "prompt", "targetNode": "llm-1", "targetPort": "prompt" }
   ]
 }
+
+CRITICAL RULES:
+1. STRICT CONSTRAINT: You are allowed at most ONE connection/link between any two nodes. Multiple links between the same two nodes are strictly forbidden. If you need to map multiple ports, remember that only one physical connection can exist between those two nodes in the visual studio graph.
+2. In prompt template variables, the first variable (e.g. {{brief}} or {{query}}) must connect from input-1, while retrieval context (e.g. {{documents}}) must connect from vector-1.
 Be helpful, professional, and explain what the generated workflow does.`;
 
     try {
@@ -890,6 +1086,14 @@ Be helpful, professional, and explain what the generated workflow does.`;
     } finally {
       setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, isStreaming: false } : m));
       setChatLoading(false);
+      
+      // Automatically load the generated workflow onto the canvas!
+      const workflow = parseJsonWorkflow(currentText);
+      if (workflow) {
+        setNodes(normalizeNodes(workflow.nodes));
+        setLinks(filterDuplicateLinks(workflow.links));
+        setStatus("Workflow built automatically on canvas!");
+      }
     }
   }
 
@@ -991,7 +1195,10 @@ Be helpful, professional, and explain what the generated workflow does.`;
           <button title="Zoom in" onClick={() => setZoom(viewport.scale + 0.12)}><ZoomIn size={16} /></button>
           <button title="Zoom out" onClick={() => setZoom(viewport.scale - 0.12)}><ZoomOut size={16} /></button>
           <span className="zoom-readout">{Math.round(viewport.scale * 100)}%</span>
-          <button title="Reset zoom" onClick={() => setViewport({ x: 16, y: 30, scale: 0.52 })}>Fit</button>
+          <button title="Fit all nodes to screen" onClick={() => fitContent()}>Fit Content</button>
+          <button title="Auto-align nodes neatly (left-to-right)" onClick={autoLayoutNodes} style={{ background: "color-mix(in srgb, var(--blue) 8%, white)", color: "var(--blue)", borderColor: "color-mix(in srgb, var(--blue) 20%, white)", border: "1px solid", borderRadius: "6px", display: "inline-flex", alignItems: "center", gap: "4px", padding: "0 10px" }}>
+            <Waypoints size={14} /> Tidy Up
+          </button>
           <button onClick={saveGraph}><Save size={16} /></button>
           <button onClick={downloadSdk}><Download size={16} /></button>
           <button title="Delete selected connection" disabled={!selectedLinkId} onClick={deleteSelectedLink}><Link2Off size={16} /></button>
@@ -1138,7 +1345,7 @@ Be helpful, professional, and explain what the generated workflow does.`;
                         style={{ marginTop: "10px", width: "100%", height: "32px", fontSize: "11px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", background: "var(--blue)", color: "white", borderRadius: "6px" }}
                         onClick={() => {
                           setNodes(normalizeNodes(workflow.nodes));
-                          setLinks(workflow.links);
+                          setLinks(filterDuplicateLinks(workflow.links));
                           setStatus("Workflow imported from Copilot!");
                         }}
                       >
@@ -1216,28 +1423,134 @@ Be helpful, professional, and explain what the generated workflow does.`;
             {selectedNode.type === "llm" && (
               <>
                 <label>Provider
-                  <select value={selectedNode.data.provider} onChange={(event) => updateSelectedData("provider", event.target.value)}>
-                    {runtime.providers?.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
+                  {runtime.providers?.length === 0 ? (
+                    <div style={{ marginTop: "4px", padding: "10px", background: "#fff1f2", border: "1px solid #ffe4e6", borderRadius: "8px", color: "var(--red)", fontSize: "12px", lineHeight: "1.4" }}>
+                      ⚠️ No AI providers configured!
+                      <button 
+                        onClick={() => setActiveView("settings")} 
+                        style={{ display: "block", marginTop: "8px", background: "var(--red)", color: "white", padding: "6px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "600", width: "100%", textAlign: "center" }}
+                      >
+                        Configure Providers in Settings
+                      </button>
+                    </div>
+                  ) : (
+                    <select value={selectedNode.data.provider || ""} onChange={(event) => updateSelectedData("provider", event.target.value)}>
+                      <option value="">Select a Provider</option>
+                      {runtime.providers?.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  )}
                 </label>
-                <label>Model<input value={selectedNode.data.model} onChange={(event) => updateSelectedData("model", event.target.value)} /></label>
+                {runtime.providers?.length > 0 && (
+                  <>
+                    <label>Model
+                      {nodeLoadingModels ? (
+                        <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "4px" }}><span className="spinner-mini" style={{ display: "inline-block", marginRight: "4px" }} /> Loading models...</div>
+                      ) : (
+                        <select 
+                          value={selectedNode.data.model || ""} 
+                          onChange={(event) => updateSelectedData("model", event.target.value)}
+                        >
+                          <option value="">Select a Model</option>
+                          {nodeModelCatalog.models?.map(m => (
+                            <option key={m} value={m}>
+                              {m} {m === nodeModelCatalog.recommendation ? "⭐ (Recommended)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </label>
+                    {nodeModelCatalog.recommendation && !nodeLoadingModels && (
+                      <div style={{ fontSize: "11px", color: "var(--blue)", fontWeight: "600", marginTop: "2px" }}>
+                        💡 Recommendation: Use '{nodeModelCatalog.recommendation}'
+                      </div>
+                    )}
+                  </>
+                )}
               </>
             )}
             
             {selectedNode.type === "vector" && (
               <>
                 <label>Vector DB
-                  <select value={selectedNode.data.vectorDatabase || ""} onChange={(event) => updateSelectedData("vectorDatabase", event.target.value)}>
-                    <option value="">Select a Database Connection</option>
-                    {runtime.databases?.map((db) => (
-                      <option key={db.id} value={db.id}>{db.name} ({db.kind})</option>
-                    ))}
-                  </select>
+                  {runtime.databases?.length === 0 ? (
+                    <div style={{ marginTop: "4px", padding: "10px", background: "#fff1f2", border: "1px solid #ffe4e6", borderRadius: "8px", color: "var(--red)", fontSize: "12px", lineHeight: "1.4" }}>
+                      ⚠️ No databases configured!
+                      <button 
+                        onClick={() => setActiveView("settings")} 
+                        style={{ display: "block", marginTop: "8px", background: "var(--red)", color: "white", padding: "6px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "600", width: "100%", textAlign: "center" }}
+                      >
+                        Configure Databases in Settings
+                      </button>
+                    </div>
+                  ) : (
+                    <select value={selectedNode.data.vectorDatabase || ""} onChange={(event) => updateSelectedData("vectorDatabase", event.target.value)}>
+                      <option value="">Select a Database Connection</option>
+                      {runtime.databases?.map((db) => (
+                        <option key={db.id} value={db.id}>{db.name} ({db.kind})</option>
+                      ))}
+                    </select>
+                  )}
                 </label>
-                <label>Collection<input value={selectedNode.data.collection} onChange={(event) => updateSelectedData("collection", event.target.value)} /></label>
-                <label>Atlas Index<input value={selectedNode.data.index} onChange={(event) => updateSelectedData("index", event.target.value)} /></label>
+                
+                <label>Embedding Provider
+                  {runtime.providers?.length === 0 ? (
+                    <div style={{ marginTop: "4px", padding: "10px", background: "#fff1f2", border: "1px solid #ffe4e6", borderRadius: "8px", color: "var(--red)", fontSize: "12px", lineHeight: "1.4" }}>
+                      ⚠️ No AI providers configured!
+                      <button 
+                        onClick={() => setActiveView("settings")} 
+                        style={{ display: "block", marginTop: "8px", background: "var(--red)", color: "white", padding: "6px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "600", width: "100%", textAlign: "center" }}
+                      >
+                        Configure Providers in Settings
+                      </button>
+                    </div>
+                  ) : (
+                    <select value={selectedNode.data.provider || ""} onChange={(event) => updateSelectedData("provider", event.target.value)}>
+                      <option value="">Select an Embedding Provider</option>
+                      {runtime.providers?.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </label>
+
+                {runtime.providers?.length > 0 && (
+                  <>
+                    <label>Embedding Model
+                      {nodeLoadingModels ? (
+                        <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "4px" }}><span className="spinner-mini" style={{ display: "inline-block", marginRight: "4px" }} /> Loading embedding models...</div>
+                      ) : (
+                        <select 
+                          value={selectedNode.data.model || ""} 
+                          onChange={(event) => updateSelectedData("model", event.target.value)}
+                        >
+                          <option value="">Select an Embedding Model</option>
+                          {nodeModelCatalog.models?.map(m => (
+                            <option key={m} value={m}>
+                              {m} {m === nodeModelCatalog.recommendation ? "⭐ (Recommended)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </label>
+                    {nodeModelCatalog.recommendation && !nodeLoadingModels && (
+                      <div style={{ fontSize: "11px", color: "var(--blue)", fontWeight: "600", marginTop: "2px" }}>
+                        💡 Recommendation: Use '{nodeModelCatalog.recommendation}'
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <label>Collection<input value={selectedNode.data.collection || ""} onChange={(event) => updateSelectedData("collection", event.target.value)} /></label>
+                <label>Atlas Index<input value={selectedNode.data.index || ""} onChange={(event) => updateSelectedData("index", event.target.value)} /></label>
+                
+                {nodeDbInfo.suggested_setup && (
+                  <div style={{ marginTop: "8px", padding: "10px", background: "#eff6ff", borderRadius: "6px", border: "1px solid #dbeafe", color: "var(--blue)", fontSize: "11px", lineHeight: "1.4" }}>
+                    <strong>💡 Database Advice:</strong>
+                    <p style={{ margin: "2px 0 0" }}>{nodeDbInfo.suggested_setup}</p>
+                  </div>
+                )}
               </>
             )}
             
@@ -1246,13 +1559,51 @@ Be helpful, professional, and explain what the generated workflow does.`;
                 <label>Role<input value={selectedNode.data.role || ""} onChange={(event) => updateSelectedData("role", event.target.value)} placeholder="e.g. Specialist, Researcher" /></label>
                 <label>Handoff / Instructions<textarea value={selectedNode.data.handoff || ""} onChange={(event) => updateSelectedData("handoff", event.target.value)} placeholder="Instructions for this agent" /></label>
                 <label>Provider
-                  <select value={selectedNode.data.provider || "openai"} onChange={(event) => updateSelectedData("provider", event.target.value)}>
-                    {runtime.providers?.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
+                  {runtime.providers?.length === 0 ? (
+                    <div style={{ marginTop: "4px", padding: "10px", background: "#fff1f2", border: "1px solid #ffe4e6", borderRadius: "8px", color: "var(--red)", fontSize: "12px", lineHeight: "1.4" }}>
+                      ⚠️ No AI providers configured!
+                      <button 
+                        onClick={() => setActiveView("settings")} 
+                        style={{ display: "block", marginTop: "8px", background: "var(--red)", color: "white", padding: "6px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "600", width: "100%", textAlign: "center" }}
+                      >
+                        Configure Providers in Settings
+                      </button>
+                    </div>
+                  ) : (
+                    <select value={selectedNode.data.provider || ""} onChange={(event) => updateSelectedData("provider", event.target.value)}>
+                      <option value="">Select a Provider</option>
+                      {runtime.providers?.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  )}
                 </label>
-                <label>Model<input value={selectedNode.data.model || "gpt-4o-mini"} onChange={(event) => updateSelectedData("model", event.target.value)} /></label>
+                {runtime.providers?.length > 0 && (
+                  <>
+                    <label>Model
+                      {nodeLoadingModels ? (
+                        <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "4px" }}><span className="spinner-mini" style={{ display: "inline-block", marginRight: "4px" }} /> Loading models...</div>
+                      ) : (
+                        <select 
+                          value={selectedNode.data.model || ""} 
+                          onChange={(event) => updateSelectedData("model", event.target.value)}
+                        >
+                          <option value="">Select a Model</option>
+                          {nodeModelCatalog.models?.map(m => (
+                            <option key={m} value={m}>
+                              {m} {m === nodeModelCatalog.recommendation ? "⭐ (Recommended)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </label>
+                    {nodeModelCatalog.recommendation && !nodeLoadingModels && (
+                      <div style={{ fontSize: "11px", color: "var(--blue)", fontWeight: "600", marginTop: "2px" }}>
+                        💡 Recommendation: Use '{nodeModelCatalog.recommendation}'
+                      </div>
+                    )}
+                  </>
+                )}
               </>
             )}
 
@@ -1529,9 +1880,50 @@ Be helpful, professional, and explain what the generated workflow does.`;
 
 function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onOpenIde, onCreateNewAgent, onApplyTemplate, savedFlows, loadGraphById, deleteGraphById }) {
   const [selectedItem, setSelectedItem] = useState({ category: "providers", id: "openai" });
+  const [modelCatalog, setModelCatalog] = useState({ models: [], recommendation: "" });
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [dbInfo, setDbInfo] = useState({ suggested_setup: "" });
 
   const categoryList = runtime[selectedItem.category] || [];
   const activeResource = categoryList.find(item => item.id === selectedItem.id) || categoryList[0] || null;
+
+  useEffect(() => {
+    if (selectedItem.category === "providers" && activeResource) {
+      setLoadingModels(true);
+      fetch(`${API_BASE}/runtime/models`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          providerType: activeResource.providerType,
+          baseUrl: activeResource.baseUrl,
+          apiKey: activeResource.apiKey
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        setModelCatalog(data);
+        setLoadingModels(false);
+      })
+      .catch(() => {
+        setLoadingModels(false);
+      });
+    }
+  }, [selectedItem.category, activeResource?.id, activeResource?.providerType, activeResource?.baseUrl, activeResource?.apiKey]);
+
+  useEffect(() => {
+    if (selectedItem.category === "databases" && activeResource) {
+      fetch(`${API_BASE}/runtime/databases/info`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: activeResource.kind })
+      })
+      .then(res => res.json())
+      .then(data => {
+        setDbInfo(data);
+      })
+      .catch(() => {});
+    }
+  }, [selectedItem.category, activeResource?.id, activeResource?.kind]);
 
   function handleAddItem(category) {
     const id = `${category}-${Date.now()}`;
@@ -1791,11 +2183,28 @@ function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onOpen
 
                 {selectedItem.category === "providers" && (
                   <>
-                    <label>Provider Type
+                    <label>Provider Preset
                       <select 
-                        value={activeResource.providerType || "openai"} 
-                        onChange={e => handleUpdateItem("providers", activeResource.id, "providerType", e.target.value)}
+                        value={activeResource.providerType || ""} 
+                        onChange={e => {
+                          const pType = e.target.value;
+                          const PROVIDER_PRESETS = {
+                            openai: { name: "OpenAI Connection", baseUrl: "https://api.openai.com/v1" },
+                            nvidia: { name: "NVIDIA NIM Connection", baseUrl: "https://integrate.api.nvidia.com/v1" },
+                            gemini: { name: "Google Gemini Connection", baseUrl: "" },
+                            openrouter: { name: "OpenRouter Connection", baseUrl: "https://openrouter.ai/api/v1" },
+                            ollama: { name: "Ollama Local Connection", baseUrl: "http://localhost:11434/v1" },
+                            lmstudio: { name: "LM Studio Connection", baseUrl: "http://localhost:1234/v1" },
+                            custom: { name: "Custom Provider Connection", baseUrl: "" }
+                          };
+                          const preset = PROVIDER_PRESETS[pType] || {};
+                          handleUpdateItem("providers", activeResource.id, "providerType", pType);
+                          handleUpdateItem("providers", activeResource.id, "name", preset.name || "");
+                          handleUpdateItem("providers", activeResource.id, "baseUrl", preset.baseUrl || "");
+                          handleUpdateItem("providers", activeResource.id, "apiKey", "");
+                        }}
                       >
+                        <option value="">Select a Provider to Auto-fill</option>
                         <option value="openai">OpenAI</option>
                         <option value="nvidia">NVIDIA NIM</option>
                         <option value="gemini">Google Gemini</option>
@@ -1827,11 +2236,30 @@ function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onOpen
 
                 {selectedItem.category === "databases" && (
                   <>
-                    <label>Database Type
+                    <label>Database Preset
                       <select 
-                        value={activeResource.kind || "mongodb_atlas"} 
-                        onChange={e => handleUpdateItem("databases", activeResource.id, "kind", e.target.value)}
+                        value={activeResource.kind || ""} 
+                        onChange={e => {
+                          const kind = e.target.value;
+                          const DATABASE_PRESETS = {
+                            mongodb_atlas: { name: "MongoDB Vector Search", connectionString: "mongodb+srv://...", database: "promptflow_studio", collection: "knowledge_base", index: "vector_index" },
+                            qdrant: { name: "Qdrant REST Connection", connectionString: "http://localhost:6333", database: "qdrant_db", collection: "knowledge_base", index: "" },
+                            pinecone: { name: "Pinecone REST Connection", connectionString: "https://...", database: "", collection: "", index: "news_index" },
+                            postgres: { name: "PostgreSQL pgvector Connection", connectionString: "postgresql://localhost:5432/...", database: "postgres", collection: "embeddings", index: "vector_idx" },
+                            sqlite: { name: "SQLite Vector Connection", connectionString: "sqlite:///vector.db", database: "main", collection: "embeddings", index: "vector_idx" },
+                            custom: { name: "Custom Database Connection", connectionString: "", database: "", collection: "", index: "" }
+                          };
+                          const preset = DATABASE_PRESETS[kind] || {};
+                          handleUpdateItem("databases", activeResource.id, "kind", kind);
+                          handleUpdateItem("databases", activeResource.id, "name", preset.name || "");
+                          handleUpdateItem("databases", activeResource.id, "connectionString", preset.connectionString || "");
+                          handleUpdateItem("databases", activeResource.id, "database", preset.database || "");
+                          handleUpdateItem("databases", activeResource.id, "collection", preset.collection || "");
+                          handleUpdateItem("databases", activeResource.id, "index", preset.index || "");
+                          handleUpdateItem("databases", activeResource.id, "apiKey", "");
+                        }}
                       >
+                        <option value="">Select a Database to Auto-fill</option>
                         <option value="mongodb_atlas">MongoDB Atlas Vector Search</option>
                         <option value="qdrant">Qdrant REST</option>
                         <option value="pinecone">Pinecone REST</option>
@@ -1938,13 +2366,139 @@ function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onOpen
                     </label>
                   </>
                 )}
+
+                {selectedItem.category === "providers" && (
+                  loadingModels ? (
+                    <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "12px" }}>
+                      <span className="spinner-mini" style={{ display: "inline-block", marginRight: "6px" }} /> Loading models catalog...
+                    </div>
+                  ) : (
+                    modelCatalog.models && modelCatalog.models.length > 0 && (
+                      <div style={{ marginTop: "14px", padding: "12px", background: "var(--surface-soft)", borderRadius: "8px", border: "1px solid var(--border)" }}>
+                        <span style={{ fontSize: "11px", fontWeight: "bold", textTransform: "uppercase", color: "var(--muted)", display: "block", marginBottom: "6px" }}>Available Models ({modelCatalog.models.length})</span>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                          {modelCatalog.models.map(m => (
+                            <span key={m} style={{ padding: "3px 8px", background: "#ffffff", border: "1px solid var(--border)", borderRadius: "4px", fontSize: "11px", fontFamily: "Geist Mono" }}>
+                              {m} {m === modelCatalog.recommendation && "⭐"}
+                            </span>
+                          ))}
+                        </div>
+                        {modelCatalog.recommendation && (
+                          <p style={{ margin: "10px 0 0", fontSize: "12px", color: "var(--blue)", fontWeight: "600" }}>
+                            💡 Recommended best model: <strong>{modelCatalog.recommendation}</strong>
+                          </p>
+                        )}
+                      </div>
+                    )
+                  )
+                )}
+
+                {selectedItem.category === "databases" && dbInfo.suggested_setup && (
+                  <div style={{ marginTop: "14px", padding: "12px", background: "#eff6ff", borderRadius: "8px", border: "1px solid #dbeafe", color: "var(--blue)", fontSize: "12px", lineHeight: "1.5" }}>
+                    <strong>💡 Configuration Recommendation:</strong>
+                    <p style={{ margin: "4px 0 0" }}>{dbInfo.suggested_setup}</p>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
-            <div className="empty-settings-detail">
-              <Boxes size={48} className="muted-icon" />
-              <h3>No Resource Selected</h3>
-              <p>Select a provider, database, or cache storage from the sidebar catalog to configure it, or click "+ Add" to create a new one.</p>
+            <div className="empty-settings-detail" style={{ padding: "40px 30px", textAlign: "center", maxWidth: "600px", margin: "0 auto" }}>
+              <div style={{ background: "color-mix(in srgb, var(--blue) 8%, white)", color: "var(--blue)", width: "64px", height: "64px", borderRadius: "50%", display: "grid", placeItems: "center", margin: "0 auto 20px" }}>
+                <Sparkles size={32} />
+              </div>
+              <h3 style={{ fontSize: "20px", fontWeight: "700", marginBottom: "10px", color: "var(--text)" }}>Welcome to PromptFlow Studio</h3>
+              <p style={{ color: "var(--muted)", fontSize: "14px", lineHeight: "1.6", marginBottom: "28px" }}>
+                Configure your active connections to start building, running, and testing agent pipelines. Select a preset below to auto-fill details, leaving only your credentials to input:
+              </p>
+              
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "18px", textAlign: "left", marginBottom: "28px" }}>
+                <div style={{ background: "var(--surface-soft)", padding: "18px", borderRadius: "12px", border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: "8px" }}>
+                  <span style={{ display: "block", fontSize: "11px", fontWeight: "bold", textTransform: "uppercase", color: "var(--muted)" }}>AI Provider Preset</span>
+                  <select 
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      const pType = e.target.value;
+                      const PROVIDER_PRESETS = {
+                        openai: { name: "OpenAI Connection", baseUrl: "https://api.openai.com/v1" },
+                        nvidia: { name: "NVIDIA NIM Connection", baseUrl: "https://integrate.api.nvidia.com/v1" },
+                        gemini: { name: "Google Gemini Connection", baseUrl: "" },
+                        openrouter: { name: "OpenRouter Connection", baseUrl: "https://openrouter.ai/api/v1" },
+                        ollama: { name: "Ollama Local Connection", baseUrl: "http://localhost:11434/v1" },
+                        lmstudio: { name: "LM Studio Connection", baseUrl: "http://localhost:1234/v1" }
+                      };
+                      const preset = PROVIDER_PRESETS[pType] || {};
+                      const id = `providers-${Date.now()}`;
+                      setRuntime(current => ({
+                        ...current,
+                        providers: [...(current.providers || []), {
+                          id,
+                          name: preset.name || "New Provider",
+                          providerType: pType,
+                          baseUrl: preset.baseUrl || "",
+                          apiKey: ""
+                        }]
+                      }));
+                      setSelectedItem({ category: "providers", id });
+                    }}
+                    style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", fontSize: "12px", outline: "none" }}
+                  >
+                    <option value="">Select AI Provider...</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="nvidia">NVIDIA NIM</option>
+                    <option value="ollama">Ollama (Local)</option>
+                    <option value="lmstudio">LM Studio (Local)</option>
+                  </select>
+                </div>
+                
+                <div style={{ background: "var(--surface-soft)", padding: "18px", borderRadius: "12px", border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: "8px" }}>
+                  <span style={{ display: "block", fontSize: "11px", fontWeight: "bold", textTransform: "uppercase", color: "var(--muted)" }}>Vector Database Preset</span>
+                  <select 
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      const dbKind = e.target.value;
+                      const DATABASE_PRESETS = {
+                        mongodb_atlas: { name: "MongoDB Vector Search", connectionString: "mongodb+srv://...", database: "promptflow_studio", collection: "knowledge_base", index: "vector_index" },
+                        qdrant: { name: "Qdrant REST Connection", connectionString: "http://localhost:6333", database: "qdrant_db", collection: "knowledge_base", index: "" },
+                        pinecone: { name: "Pinecone REST Connection", connectionString: "https://...", database: "", collection: "", index: "news_index" },
+                        postgres: { name: "PostgreSQL pgvector Connection", connectionString: "postgresql://localhost:5432/...", database: "postgres", collection: "embeddings", index: "vector_idx" },
+                        sqlite: { name: "SQLite Vector Connection", connectionString: "sqlite:///vector.db", database: "main", collection: "embeddings", index: "vector_idx" }
+                      };
+                      const preset = DATABASE_PRESETS[dbKind] || {};
+                      const id = `databases-${Date.now()}`;
+                      setRuntime(current => ({
+                        ...current,
+                        databases: [...(current.databases || []), {
+                          id,
+                          name: preset.name || "New Database",
+                          kind: dbKind,
+                          connectionString: preset.connectionString || "",
+                          database: preset.database || "",
+                          collection: preset.collection || "",
+                          index: preset.index || "",
+                          apiKey: ""
+                        }]
+                      }));
+                      setSelectedItem({ category: "databases", id });
+                    }}
+                    style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", fontSize: "12px", outline: "none" }}
+                  >
+                    <option value="">Select Database...</option>
+                    <option value="mongodb_atlas">MongoDB Atlas Vector Search</option>
+                    <option value="qdrant">Qdrant REST</option>
+                    <option value="pinecone">Pinecone REST</option>
+                    <option value="postgres">PostgreSQL pgvector</option>
+                    <option value="sqlite">SQLite Vector</option>
+                  </select>
+                </div>
+              </div>
+              
+              <div style={{ color: "var(--muted)", fontSize: "12px" }}>
+                Select an existing category in the sidebar and click <strong>"+ Add"</strong> to configure manually.
+              </div>
             </div>
           )}
 

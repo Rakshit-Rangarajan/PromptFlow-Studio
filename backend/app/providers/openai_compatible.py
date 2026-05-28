@@ -22,10 +22,45 @@ class OpenAICompatibleProvider:
         if not self.api_key:
             import asyncio
             prompt = request.messages[-1]["content"] if request.messages else ""
-            simulated_response = f"[Simulated Local Response]\nBased on the input: '{prompt[:60]}...'\nThe execution completed successfully! This simulated response is generated locally because no API key was configured for this provider in the hosted Settings."
+            
+            # Check if user is asking to create/make/build an agent or workflow
+            if any(word in prompt.lower() for word in ["make", "create", "build", "generate", "setup", "design", "flow", "agent", "workflow"]):
+                simulated_response = """Here is a custom agent workflow I've designed for you:
+
+### News Aggregator Agent Workflow
+This pipeline contains:
+1. **User Query Input**: Captures search topic
+2. **Search Prompt Template**: Prepares search query formatting
+3. **LLM Search Mimic**: Simulates Google News search parsing
+4. **Aggregator Writer Sub-agent**: Formats raw findings into a beautiful top-10 list
+5. **Output**: Terminal display showcases the aggregated report
+
+```json
+{
+  "nodes": [
+    { "id": "input-1", "type": "input", "label": "Search Topic", "position": {"x": 60, "y": 140}, "inputs": [], "outputs": [{"id": "value", "label": "value"}], "data": {"key": "topic", "value": "Google AI news"} },
+    { "id": "prompt-1", "type": "prompt", "label": "Search Prompt", "position": {"x": 320, "y": 140}, "inputs": [{"id": "topic", "label": "topic"}], "outputs": [{"id": "prompt", "label": "prompt"}], "data": {"template": "Extract top 10 relevant news items for search query: {{topic}}"} },
+    { "id": "llm-search", "type": "llm", "label": "Google News Mimic", "position": {"x": 580, "y": 140}, "inputs": [{"id": "prompt", "label": "prompt"}], "outputs": [{"id": "completion", "label": "completion"}], "data": {"provider": "openai", "model": "gpt-4o-mini", "temperature": 0.2} },
+    { "id": "subagent-writer", "type": "subagent", "label": "Aggregator Writer", "position": {"x": 840, "y": 140}, "inputs": [{"id": "task", "label": "task"}, {"id": "context", "label": "context"}], "outputs": [{"id": "result", "label": "result"}], "data": {"role": "Technical Writer", "handoff": "Organize these news details into a beautiful top-10 list."} },
+    { "id": "output-1", "type": "output", "label": "Aggregated Report", "position": {"x": 1100, "y": 140}, "inputs": [{"id": "input", "label": "input"}], "outputs": [], "data": {} }
+  ],
+  "links": [
+    { "id": "l1", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "prompt-1", "targetPort": "topic" },
+    { "id": "l2", "sourceNode": "prompt-1", "sourcePort": "prompt", "targetNode": "llm-search", "targetPort": "prompt" },
+    { "id": "l3", "sourceNode": "llm-search", "sourcePort": "completion", "targetNode": "subagent-writer", "targetPort": "context" },
+    { "id": "l4", "sourceNode": "input-1", "sourcePort": "value", "targetNode": "subagent-writer", "targetPort": "task" },
+    { "id": "l5", "sourceNode": "subagent-writer", "sourcePort": "result", "targetNode": "output-1", "targetPort": "input" }
+  ]
+}
+```
+
+Click the **'Load Workflow into Canvas'** button below to automatically load these nodes and connections into your drag-and-drop workspace!"""
+            else:
+                simulated_response = f"[Simulated Local Response]\nBased on the input: '{prompt[:60]}...'\nThe execution completed successfully! This simulated response is generated locally because no API key was configured for this provider in the hosted Settings."
+            
             for token in simulated_response.split(" "):
                 yield token + " "
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.04)
             return
 
         payload = request.model_dump(exclude={"provider", "runtime"})
