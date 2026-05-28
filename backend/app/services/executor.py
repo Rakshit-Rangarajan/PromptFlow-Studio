@@ -129,6 +129,7 @@ async def execute_graph_stream(graph: GraphDocument, runtime: RuntimeConfig | No
     node_count = len(ordered)
     node_errors: list[dict[str, str]] = []
     last_output_text = ""
+    last_executed_result = ""
 
     for error in _preflight_errors(graph, runtime):
         node_errors.append(error)
@@ -321,7 +322,8 @@ async def execute_graph_stream(graph: GraphDocument, runtime: RuntimeConfig | No
                     active_paths.add((node.id, outp.id))
                 active_paths.add((node.id, "default"))
 
-            output_preview = str(result)[:500] if result else ""
+            last_executed_result = result
+            output_preview = str(result) if result else ""
             yield _sse({"event": "node:output", "node": node.id, "output": output_preview})
             yield _sse({"event": "node:complete", "node": node.id, "durationMs": elapsed_ms, "step": step_index})
 
@@ -329,6 +331,9 @@ async def execute_graph_stream(graph: GraphDocument, runtime: RuntimeConfig | No
             elapsed_ms = round((time.perf_counter() - t0) * 1000)
             node_errors.append({"node": node.id, "label": node.label, "message": str(exc)})
             yield _sse({"event": "node:error", "node": node.id, "message": str(exc), "durationMs": elapsed_ms})
+
+    if not last_output_text and last_executed_result:
+        last_output_text = last_executed_result
 
     yield _sse({
         "event": "complete",

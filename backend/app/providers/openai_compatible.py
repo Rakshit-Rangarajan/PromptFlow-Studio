@@ -69,6 +69,12 @@ class OpenAICompatibleProvider:
                 # If we've already yielded tokens, or it's the last attempt, or it's not a transient error, propagate
                 if tokens_yielded or attempt == max_retries or not is_transient:
                     provider_name = self.provider_name.upper()
+                    try:
+                        await exc.response.aread()
+                        err_detail = exc.response.text
+                    except Exception:
+                        err_detail = str(exc)
+
                     if status == 504:
                         raise RuntimeError(
                             f"The upstream LLM provider ({provider_name}) took too long to respond (504 Gateway Timeout). "
@@ -91,7 +97,7 @@ class OpenAICompatibleProvider:
                         ) from exc
                     else:
                         raise RuntimeError(
-                            f"LLM provider ({provider_name}) returned error status {status}: {exc.response.text or str(exc)}"
+                            f"LLM provider ({provider_name}) returned error status {status}: {err_detail}"
                         ) from exc
                 
                 # Exponential backoff
