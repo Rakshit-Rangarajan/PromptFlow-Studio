@@ -25,25 +25,44 @@ export function Home({ onLaunchIde, onOpenTemplates }) {
   // Contact form state and submit logic
   const [contactForm, setContactForm] = useState({ name: "", email: "", message: "" });
   const [contactSuccess, setContactSuccess] = useState(false);
+  const [contactSubmitting, setContactSubmitting] = useState(false);
+  const [contactError, setContactError] = useState("");
 
-  const handleContactSubmit = (e) => {
+  const handleContactSubmit = async (e) => {
     e.preventDefault();
-    
-    const recipient = "rakshitr2000@gmail.com";
-    const subject = encodeURIComponent(`Visitor Notification: ${contactForm.name} visited PromptFlow Studio`);
-    const body = encodeURIComponent(
-      `Hello Rakshit,\n\nThis person has visited your website and wanted to get in touch!\n\nName: ${contactForm.name}\nEmail: ${contactForm.email}\n\nMessage:\n${contactForm.message}\n\nSent from: PromptFlow Studio Portfolio`
-    );
-    
-    // Open standard mailto system handler
-    window.location.href = `mailto:${recipient}?subject=${subject}&body=${body}`;
-    
-    // Trigger animated UI success feedback
-    setContactSuccess(true);
-    setTimeout(() => {
-      setContactSuccess(false);
-      setContactForm({ name: "", email: "", message: "" });
-    }, 4000);
+    setContactSubmitting(true);
+    setContactError("");
+    setContactSuccess(false);
+
+    try {
+      const response = await fetch("https://formsubmit.co/ajax/rakshitr2000@gmail.com", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          Name: contactForm.name,
+          Email: contactForm.email,
+          Message: contactForm.message,
+          _subject: `Visitor Notification: ${contactForm.name} visited PromptFlow Studio`,
+          _honey: "", // Honeypot spam protection (hidden)
+          _template: "table" // Elegant table format in the email body
+        })
+      });
+
+      const data = await response.json();
+      if (data.success === "true") {
+        setContactSuccess(true);
+        setContactForm({ name: "", email: "", message: "" });
+      } else {
+        setContactError(data.message || "Something went wrong. Please try again.");
+      }
+    } catch (err) {
+      setContactError("Unable to reach the email service. Please check your connection.");
+    } finally {
+      setContactSubmitting(false);
+    }
   };
 
   // Simulated node state machine for visual interactive canvas
@@ -528,13 +547,24 @@ export function Home({ onLaunchIde, onOpenTemplates }) {
                   required
                 />
               </div>
-              <button type="submit" className="btn-primary" style={{ width: "max-content", alignSelf: "flex-start" }}>
-                Send Message <ArrowRight size={16} />
+              <button 
+                type="submit" 
+                className="btn-primary" 
+                style={{ width: "max-content", alignSelf: "flex-start" }}
+                disabled={contactSubmitting}
+              >
+                {contactSubmitting ? "Sending..." : "Send Message"} <ArrowRight size={16} />
               </button>
 
               {contactSuccess && (
                 <div className="contact-success-msg">
-                  <Check size={14} /> <strong>Thank you, {contactForm.name}!</strong> Your default mail client has been opened to transmit your message.
+                  <Check size={14} /> <strong>Thank you!</strong> Your message has been sent successfully. (Note: On your first visit, check your inbox to activate FormSubmit).
+                </div>
+              )}
+
+              {contactError && (
+                <div className="contact-success-msg" style={{ background: "#fff1f2", border: "1px solid rgba(225, 29, 72, 0.2)", color: "#e11d48" }}>
+                  <strong>Error:</strong> {contactError}
                 </div>
               )}
             </form>
