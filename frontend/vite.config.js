@@ -5,7 +5,7 @@ export default defineConfig({
   cacheDir: ".vite-cache",
   plugins: [react()],
   build: {
-    outDir: "dist-build",
+    outDir: "dist",
     emptyOutDir: false
   },
   server: {
