@@ -2348,7 +2348,7 @@ Be helpful, professional, and keep the output focused on the JSON structure only
     </div>
   );
 
-  if (!sessionUser?.username) {
+  if (!sessionUser?.username && activeView !== "home") {
     return authScreen;
   }
 
