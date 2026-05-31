@@ -114,6 +114,7 @@ const nodeTypes = [
 ];
 
 const navItems = [
+  { id: "home", label: "Home" },
   { id: "ide", label: "IDE" },
   { id: "flows", label: "Flows" },
   { id: "templates", label: "Templates" },

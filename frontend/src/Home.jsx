@@ -11,10 +11,12 @@ import {
   Github,
   Layers,
   Linkedin,
+  Globe,
   RotateCcw,
   Sparkles,
   Video
 } from "lucide-react";
+import profileImage from "../../DP.jpeg";
 import "./home.css";
 
 const embedUrl = "https://drive.google.com/file/d/15Ec6bOf10d5qD48JdaKLwjaeo9tIhqdG/preview";
@@ -359,7 +361,7 @@ export function Home({ onLaunchIde, onOpenTemplates }) {
               <div className="author-avatar-frame">
                 <div className="author-avatar-inner">
                   <img
-                    src="/DP.jpeg"
+                    src={profileImage}
                     alt="Rakshit Rangarajan"
                     className="author-avatar-image"
                   />
@@ -405,6 +407,15 @@ export function Home({ onLaunchIde, onOpenTemplates }) {
                   rel="noopener noreferrer"
                 >
                   <Github size={15} /> GitHub <ExternalLink size={11} />
+                </a>
+
+                <a
+                  href="https://rakshitr.co.in"
+                  className="social-btn btn-website"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Globe size={15} /> Website <ExternalLink size={11} />
                 </a>
               </div>
             </div>
