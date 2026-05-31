@@ -49,6 +49,8 @@ import {
   wouldCreateCycle
 } from "./lib/graph";
 import { compileGraphToSdk } from "./lib/compiler";
+import { Home } from "./Home.jsx";
+import "./home.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "/api";
 
@@ -937,7 +939,7 @@ export function App() {
   const [authForm, setAuthForm] = useState({ username: storedAccount?.username || "", password: "" });
   const [authError, setAuthError] = useState("");
   const [runtimeSaveStatus, setRuntimeSaveStatus] = useState("Saved locally");
-  const [activeView, setActiveView] = useState(storedWorkspace?.activeView || "ide");
+  const [activeView, setActiveView] = useState("home");
   const [nodes, setNodes] = useState(() => normalizeNodes(storedWorkspace?.nodes || initialNodes));
   const [links, setLinks] = useState(() => filterDuplicateLinks(storedWorkspace?.links || initialLinks));
   const [graphId, setGraphId] = useState(storedWorkspace?.graphId || null);
@@ -2426,19 +2428,32 @@ Be helpful, professional, and keep the output focused on the JSON structure only
           </nav>
         </div>
         <div className="top-actions">
-          <label className="search"><Search size={15} /><input placeholder="Search prompts..." /></label>
-          <button className="ghost" onClick={createNewAgent}><Plus size={15} /> New agent</button>
-          <button className="ghost" onClick={compileSdk}><ArrowDownToLine size={15} /> Compile</button>
-          <button className={`ghost ${chatOpen ? "active" : ""}`} style={{ color: chatOpen ? "var(--blue)" : "inherit", borderColor: chatOpen ? "var(--blue)" : "var(--border)" }} onClick={() => setChatOpen(!chatOpen)}>
-            <Bot size={15} /> Agent Chat
-          </button>
-          <button className="primary" onClick={runGraph}><CirclePlay size={15} /> Execute workflow</button>
+          {activeView === "home" ? (
+            <button className="primary" onClick={() => setActiveView("ide")}>
+              <CirclePlay size={15} /> Launch Studio
+            </button>
+          ) : (
+            <>
+              <label className="search"><Search size={15} /><input placeholder="Search prompts..." /></label>
+              <button className="ghost" onClick={createNewAgent}><Plus size={15} /> New agent</button>
+              <button className="ghost" onClick={compileSdk}><ArrowDownToLine size={15} /> Compile</button>
+              <button className={`ghost ${chatOpen ? "active" : ""}`} style={{ color: chatOpen ? "var(--blue)" : "inherit", borderColor: chatOpen ? "var(--blue)" : "var(--border)" }} onClick={() => setChatOpen(!chatOpen)}>
+                <Bot size={15} /> Agent Chat
+              </button>
+              <button className="primary" onClick={runGraph}><CirclePlay size={15} /> Execute workflow</button>
+            </>
+          )}
         </div>
       </header>
 
 
 
-      {activeView === "ide" ? (
+      {activeView === "home" ? (
+        <Home
+          onLaunchIde={() => setActiveView("ide")}
+          onOpenTemplates={() => setActiveView("templates")}
+        />
+      ) : activeView === "ide" ? (
       <>
       <section className="palette">
         <div className="panel-heading">
