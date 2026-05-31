@@ -6,7 +6,7 @@ A single-page visual IDE for prompt pipelines with a React canvas frontend, Fast
 
 ```powershell
 cd frontend
-npm.cmd install
+    npm.cmd install
 npm.cmd run dev
 ```
 
