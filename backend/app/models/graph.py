@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-NodeType = Literal["input", "prompt", "llm", "vector", "router", "output", "subagent", "code", "custom"]
+NodeType = Literal["input", "prompt", "llm", "vector", "router", "output", "subagent", "code", "custom", "datastore", "document_loader"]
 
 
 class Position(BaseModel):

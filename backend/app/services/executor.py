@@ -200,6 +200,60 @@ async def execute_graph_stream(graph: GraphDocument, runtime: RuntimeConfig | No
                 result = "\n".join(str(item.get("text", item)) for item in docs)
                 state["documents"] = result
 
+            elif node.type == "datastore":
+                operation = node.data.get("operation", "save")
+                collection_name = node.data.get("collection", "data_store")
+                payload_key = node.data.get("key", "text")
+                input_val = str(state.get("input") or state.get("result") or state.get("completion") or state.get("prompt") or "")
+                
+                selected_db_id = node.data.get("vectorDatabase") or node.data.get("database")
+                selected_db = None
+                for db in getattr(runtime, "databases", []):
+                    if db.id == selected_db_id:
+                        selected_db = db
+                        break
+                
+                db_base = selected_db or runtime.vectorDatabase
+                kind = getattr(db_base, "kind", "mongodb_atlas").lower()
+                connection_string = getattr(db_base, "connectionString", "")
+                
+                if not connection_string:
+                    raise RuntimeError("Database connection string is required in Settings before this workflow can run.")
+                
+                if "mongo" in kind or "atlas" in kind:
+                    from motor.motor_asyncio import AsyncIOMotorClient
+                    client = AsyncIOMotorClient(connection_string)
+                    try:
+                        db = client[getattr(db_base, "database", "promptflow") or "promptflow"]
+                        col = db[collection_name]
+                        if operation == "save":
+                            doc = {payload_key: input_val, "timestamp": time.time()}
+                            await col.insert_one(doc)
+                            result = f"Successfully saved to MongoDB collection '{collection_name}': {input_val[:100]}..."
+                        else: # load
+                            cursor = col.find({}, {"_id": 0}).sort("timestamp", -1).limit(5)
+                            docs = await cursor.to_list(length=5)
+                            result = "\n".join(str(doc.get(payload_key, doc)) for doc in docs)
+                    finally:
+                        client.close()
+                else:
+                    result = f"Unsupported database type '{kind}' for Data Store operation."
+                
+                state["data_store"] = result
+
+            elif node.type == "document_loader":
+                source_type = node.data.get("source_type", "url")
+                url = str(state.get("url") or node.data.get("url", ""))
+                if source_type == "url" and url:
+                    import httpx
+                    async with httpx.AsyncClient(timeout=15) as client:
+                        resp = await client.get(url)
+                        resp.raise_for_status()
+                        result = resp.text
+                else:
+                    result = node.data.get("text", "No document source configured.")
+                state["document"] = result
+
             elif node.type == "llm":
                 provider_name = _resolve_provider_name(str(node.data.get("provider", "")), runtime, "completion")
                 request = CompletionRequest(

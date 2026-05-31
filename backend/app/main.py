@@ -87,7 +87,7 @@ async def complete(request: CompletionRequest) -> dict[str, str]:
         if hasattr(provider, "_ensure_key"):
             provider._ensure_key()
         content = await provider.complete(request)
-    except RuntimeError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"content": content}
 
@@ -98,15 +98,15 @@ async def stream_llm(request: CompletionRequest):
         provider = get_provider(request.provider, request.runtime)
         if hasattr(provider, "_ensure_key"):
             provider._ensure_key()
-    except RuntimeError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     async def events():
         try:
             async for chunk in provider.stream(request):
                 yield f"data: {chunk}\n\n"
-        except RuntimeError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            yield f"data: Error: {str(exc)}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream")
 
@@ -121,7 +121,7 @@ async def search_vectors(request: VectorSearchRequest):
             "path": request.path,
         })
         return await search_vector_database(vector_config, embedding, request.limit)
-    except RuntimeError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

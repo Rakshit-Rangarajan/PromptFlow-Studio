@@ -15,14 +15,19 @@ import {
   Database,
   Download,
   FileText,
+  Folder,
   GitBranch,
+  Globe,
+  Hand,
   KeyRound,
   Link2Off,
   LogIn,
   LogOut,
+  MousePointer2,
   Plus,
   Save,
   Search,
+  Sliders,
   Sparkles,
   Split,
   User,
@@ -40,6 +45,7 @@ import {
   linkSignature,
   portPosition,
   scanTemplateVariables,
+  topologicalOrder,
   wouldCreateCycle
 } from "./lib/graph";
 import { compileGraphToSdk } from "./lib/compiler";
@@ -97,6 +103,8 @@ const nodeTypes = [
   { type: "llm", label: "LLM", icon: BrainCircuit, color: "#10b981", category: "AI" },
   { type: "subagent", label: "Sub-agent", icon: Bot, color: "#6366f1", category: "Agents" },
   { type: "vector", label: "Vector Search", icon: Database, color: "#f97316", category: "Data" },
+  { type: "datastore", label: "Data Store", icon: Folder, color: "#f59e0b", category: "Data" },
+  { type: "document_loader", label: "Document Loader", icon: Globe, color: "#06b6d4", category: "Data" },
   { type: "output", label: "Output", icon: ArrowDownToLine, color: "#ec4899", category: "Core" },
   { type: "router", label: "Conditional", icon: Split, color: "#eab308", category: "Core" },
   { type: "code", label: "Code Transform", icon: Code, color: "#8b5cf6", category: "Core" },
@@ -197,6 +205,19 @@ const defaultRuntime = {
   ]
 };
 
+const defaultUiPreferences = {
+  simplifyEverything: false,
+  compactLayout: false,
+  readableText: false,
+  reduceMotion: false,
+  hideAdvancedPanels: false
+};
+
+const defaultTestCases = [
+  { id: "test-1", name: "Happy path", input: "Explain the workflow in one clear sentence.", expected: "" },
+  { id: "test-2", name: "Short input", input: "Summarize this.", expected: "" }
+];
+
 const STORAGE_PREFIX = "promptflow-studio";
 
 function storageKey(kind, username = "guest") {
@@ -216,6 +237,330 @@ function writeStoredJson(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {}
+}
+
+function normalizeUiPreferences(value = {}) {
+  return {
+    ...defaultUiPreferences,
+    ...(value || {}),
+    simplifyEverything: !!value?.simplifyEverything,
+    compactLayout: !!value?.compactLayout,
+    readableText: !!value?.readableText,
+    reduceMotion: !!value?.reduceMotion,
+    hideAdvancedPanels: !!value?.hideAdvancedPanels
+  };
+}
+
+function buildWorkflowHealthIssues(nodes = [], links = [], runtime = {}) {
+  const issues = [];
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const providers = runtime.providers || [];
+  const databases = runtime.databases || [];
+  const providerMap = new Map();
+  const databaseMap = new Map();
+  const incomingMap = new Map(nodes.map((node) => [node.id, []]));
+  const outgoingMap = new Map(nodes.map((node) => [node.id, []]));
+  const seenLinks = new Set();
+
+  for (const provider of providers) {
+    const aliases = [
+      provider?.id,
+      provider?.providerType,
+      provider?.name
+    ].map((item) => `${item || ""}`.toLowerCase()).filter(Boolean);
+    for (const alias of aliases) {
+      providerMap.set(alias, provider);
+    }
+  }
+
+  for (const database of databases) {
+    const id = `${database?.id || ""}`.toLowerCase();
+    if (id) databaseMap.set(id, database);
+  }
+
+  for (const link of links || []) {
+    if (nodeIds.has(link.sourceNode)) outgoingMap.get(link.sourceNode)?.push(link);
+    if (nodeIds.has(link.targetNode)) incomingMap.get(link.targetNode)?.push(link);
+    const signature = linkSignature(link);
+    if (seenLinks.has(signature)) {
+      issues.push({
+        severity: "warning",
+        title: "Duplicate connection",
+        message: `The link from ${link.sourceNode}.${link.sourcePort} to ${link.targetNode}.${link.targetPort} is duplicated.`,
+        nodeId: link.targetNode,
+        focus: "canvas",
+        action: "Remove duplicate"
+      });
+    } else {
+      seenLinks.add(signature);
+    }
+  }
+
+  if (nodes.length === 0) {
+    issues.push({
+      severity: "info",
+      title: "Blank canvas",
+      message: "Add an input, prompt, and output to get the first run moving.",
+      focus: "canvas",
+      action: "Create starter flow"
+    });
+  }
+
+  if (!nodes.some((node) => node.type === "output")) {
+    issues.push({
+      severity: "warning",
+      title: "Missing output node",
+      message: "The workflow does not have a final output node yet.",
+      focus: "canvas",
+      action: "Add output node"
+    });
+  }
+
+  if (links.some((link) => link.invalid)) {
+    issues.push({
+      severity: "error",
+      title: "Invalid cycle link",
+      message: "A red invalid link is blocking execution.",
+      focus: "canvas",
+      action: "Fix cycle"
+    });
+  }
+
+  if (nodes.length > 1 && wouldCreateCycle(nodes, links)) {
+    issues.push({
+      severity: "error",
+      title: "Cycle detected",
+      message: "The graph loops back into itself and cannot execute safely.",
+      focus: "canvas",
+      action: "Break cycle"
+    });
+  }
+
+  for (const node of nodes) {
+    const incoming = incomingMap.get(node.id) || [];
+    const outgoing = outgoingMap.get(node.id) || [];
+    const isIsolated = incoming.length === 0 && outgoing.length === 0;
+
+    if (isIsolated && nodes.length > 1) {
+      issues.push({
+        severity: "info",
+        title: "Isolated node",
+        message: `${node.label} is not connected to anything yet.`,
+        nodeId: node.id,
+        focus: "node",
+        action: "Focus node"
+      });
+    }
+
+    if (node.type === "prompt" && !`${node.data?.template || ""}`.trim()) {
+      issues.push({
+        severity: "info",
+        title: "Empty prompt",
+        message: "The prompt template is blank, so the model will get very little guidance.",
+        nodeId: node.id,
+        focus: "node",
+        action: "Edit prompt"
+      });
+    }
+
+    if ((node.type === "llm" || node.type === "subagent") && !`${node.data?.model || ""}`.trim()) {
+      issues.push({
+        severity: "warning",
+        title: "Model not selected",
+        message: `${node.label} still needs a model choice.`,
+        nodeId: node.id,
+        focus: "node",
+        action: "Pick model"
+      });
+    }
+
+    if (node.type === "llm" || node.type === "subagent") {
+      const selectedProvider = `${node.data?.provider || ""}`.toLowerCase();
+      const provider = providerMap.get(selectedProvider) || providerMap.get(normalizeProviderType({ providerType: selectedProvider }));
+      const providerIsLocal = ["ollama", "lmstudio", "lm-studio"].includes(selectedProvider);
+      if (!selectedProvider) {
+        issues.push({
+          severity: "warning",
+          title: "Provider not selected",
+          message: `${node.label} should point to a provider from Settings.`,
+          nodeId: node.id,
+          focus: "settings",
+          action: "Open providers"
+        });
+      } else if (!provider && !providerIsLocal) {
+        issues.push({
+          severity: "warning",
+          title: "Provider missing in Settings",
+          message: `${selectedProvider} is not configured in the runtime panel.`,
+          nodeId: node.id,
+          focus: "settings",
+          action: "Open providers"
+        });
+      } else if (provider && !providerIsLocal && !`${provider.apiKey || ""}`.trim()) {
+        issues.push({
+          severity: "warning",
+          title: "API key missing",
+          message: `${selectedProvider} needs an API key in Settings.`,
+          nodeId: node.id,
+          focus: "settings",
+          action: "Open providers"
+        });
+      }
+    }
+
+    if (node.type === "vector") {
+      const selectedDbId = `${node.data?.vectorDatabase || ""}`.toLowerCase();
+      const database = databaseMap.get(selectedDbId);
+      if (!selectedDbId) {
+        issues.push({
+          severity: "error",
+          title: "Vector DB not selected",
+          message: "Pick a vector database before running this node.",
+          nodeId: node.id,
+          focus: "node",
+          action: "Choose database"
+        });
+      } else if (!database) {
+        issues.push({
+          severity: "error",
+          title: "Vector DB missing",
+          message: "The selected vector database no longer exists in Settings.",
+          nodeId: node.id,
+          focus: "settings",
+          action: "Open databases"
+        });
+      } else if (!`${database.connectionString || ""}`.trim()) {
+        issues.push({
+          severity: "warning",
+          title: "Connection string missing",
+          message: `${database.name || "The database"} needs a connection string.`,
+          nodeId: node.id,
+          focus: "settings",
+          action: "Open databases"
+        });
+      }
+      if (!`${node.data?.collection || ""}`.trim()) {
+        issues.push({
+          severity: "info",
+          title: "Collection not set",
+          message: "Choose the collection or namespace you want to search.",
+          nodeId: node.id,
+          focus: "node",
+          action: "Edit collection"
+        });
+      }
+    }
+
+    if (node.type === "router" && !`${node.data?.condition || ""}`.trim()) {
+      issues.push({
+        severity: "info",
+        title: "Router has no condition",
+        message: "The conditional branch will be more useful with an explicit rule.",
+        nodeId: node.id,
+        focus: "node",
+        action: "Edit router"
+      });
+    }
+
+    if ((node.type === "code" || node.type === "custom") && !`${node.data?.code || ""}`.trim()) {
+      issues.push({
+        severity: "info",
+        title: "Code step is empty",
+        message: "This node will not transform anything until it has code.",
+        nodeId: node.id,
+        focus: "node",
+        action: "Add code"
+      });
+    }
+
+    if (node.type === "output" && incoming.length === 0) {
+      issues.push({
+        severity: "warning",
+        title: "Output is disconnected",
+        message: "The final output node is not receiving any data yet.",
+        nodeId: node.id,
+        focus: "node",
+        action: "Connect input"
+      });
+    }
+  }
+
+  const severityRank = { error: 0, warning: 1, info: 2 };
+  return issues.sort((a, b) => (severityRank[a.severity] ?? 9) - (severityRank[b.severity] ?? 9));
+}
+
+function buildReplaySummary(events = [], finalEvent = null) {
+  const starts = events.filter((entry) => entry.event === "node:start").length;
+  const completed = events.filter((entry) => entry.event === "node:complete").length;
+  const skipped = events.filter((entry) => entry.event === "node:skipped").length;
+  const errors = events.filter((entry) => entry.event === "node:error").length;
+
+  if (finalEvent?.errorCount) {
+    return `Ran ${starts} step(s), completed ${completed}, and finished with ${finalEvent.errorCount} error(s).`;
+  }
+
+  if (finalEvent?.hasOutput) {
+    return `Ran ${completed} step(s)${skipped ? `, skipped ${skipped}` : ""}, and produced output successfully.`;
+  }
+
+  if (errors > 0) {
+    return `Execution stopped with ${errors} node error(s).`;
+  }
+
+  return `Executed ${completed} step(s)${skipped ? `, with ${skipped} skipped` : ""}.`;
+}
+
+async function streamGraphExecution({ graph, runtime, onEvent, signal }) {
+  const response = await fetch(`${API_BASE}/execute/stream`, {
+    method: "POST",
+    signal,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ graph, runtime })
+  });
+
+  if (!response.ok) {
+    return { ok: false, errorMessage: await readErrorMessage(response) };
+  }
+
+  if (!response.body) {
+    return { ok: false, errorMessage: "Streaming unavailable." };
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalEvent = null;
+
+  const processChunk = (chunk) => {
+    const line = chunk.split("\n").find((entry) => entry.startsWith("data:"));
+    if (!line) return;
+    const payloadStr = line.replace(/^data:\s?/, "").trim();
+    if (!payloadStr) return;
+    try {
+      const data = JSON.parse(payloadStr);
+      onEvent?.(data);
+      if (data.event === "complete") {
+        finalEvent = data;
+      }
+    } catch {}
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop();
+    for (const chunk of chunks) {
+      processChunk(chunk);
+    }
+  }
+
+  if (buffer.trim()) {
+    processChunk(buffer);
+  }
+
+  return { ok: true, finalEvent };
 }
 
 function buildExecutionRuntime(nodes, runtime) {
@@ -311,6 +656,137 @@ function parseJsonWorkflow(text) {
   return null;
 }
 
+function stripJsonBlocks(text) {
+  if (!text) return "";
+  
+  let clean = text;
+  
+  // Strip active or partial ```json code blocks (handles streaming state gracefully)
+  const jsonIndex = clean.toLowerCase().indexOf("```json");
+  if (jsonIndex !== -1) {
+    const nextCloseIndex = clean.indexOf("```", jsonIndex + 7);
+    if (nextCloseIndex !== -1) {
+      clean = clean.substring(0, jsonIndex) + clean.substring(nextCloseIndex + 3);
+    } else {
+      clean = clean.substring(0, jsonIndex);
+    }
+  }
+  
+  // Strip generic ``` code blocks if they enclose JSON structures
+  const genericIndex = clean.indexOf("```");
+  if (genericIndex !== -1) {
+    const nextCloseIndex = clean.indexOf("```", genericIndex + 3);
+    if (nextCloseIndex !== -1) {
+      const inner = clean.substring(genericIndex + 3, nextCloseIndex).trim();
+      if (inner.startsWith("{") && inner.endsWith("}")) {
+        clean = clean.substring(0, genericIndex) + clean.substring(nextCloseIndex + 3);
+      }
+    } else {
+      const innerPart = clean.substring(genericIndex + 3).trim();
+      if (innerPart.startsWith("{")) {
+        clean = clean.substring(0, genericIndex);
+      }
+    }
+  }
+
+  // Strip raw un-fenced JSON structures if they represent parsed workflows
+  const start = clean.indexOf("{");
+  const end = clean.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    const candidate = clean.substring(start, end + 1);
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed.nodes && parsed.links) {
+        clean = clean.substring(0, start) + clean.substring(end + 1);
+      }
+    } catch (e) {}
+  }
+  
+  return clean.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function FormattedMessage({ text }) {
+  if (!text) return null;
+
+  const lines = text.split("\n");
+  
+  const parseInline = (chunk) => {
+    const regex = /(\*\*.*?\*\*|`.*?`)/g;
+    const splitChunks = chunk.split(regex);
+    
+    return splitChunks.map((part, index) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        return <strong key={index} style={{ fontWeight: "700" }}>{part.slice(2, -2)}</strong>;
+      }
+      if (part.startsWith("`") && part.endsWith("`")) {
+        return (
+          <code 
+            key={index} 
+            style={{ 
+              fontFamily: "Geist Mono, monospace", 
+              fontSize: "11px", 
+              background: "rgba(0, 0, 0, 0.05)", 
+              padding: "2px 5px", 
+              borderRadius: "4px", 
+              border: "1px solid rgba(0, 0, 0, 0.08)",
+              color: "#e11d48"
+            }}
+          >
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+      return part;
+    });
+  };
+
+  const listItems = [];
+  const content = [];
+  
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    const trimmed = line.trim();
+    
+    if (trimmed.startsWith("* ") || trimmed.startsWith("- ")) {
+      const bulletText = trimmed.slice(2);
+      listItems.push(
+        <li key={lineIndex} style={{ margin: "4px 0", paddingLeft: "4px" }}>
+          {parseInline(bulletText)}
+        </li>
+      );
+    } else {
+      if (listItems.length > 0) {
+        content.push(
+          <ul key={`list-${lineIndex}`} style={{ margin: "8px 0", paddingLeft: "20px", listStyleType: "disc" }}>
+            {[...listItems]}
+          </ul>
+        );
+        listItems.length = 0;
+      }
+      
+      if (trimmed === "") {
+        content.push(<div key={`space-${lineIndex}`} style={{ height: "8px" }} />);
+      } else {
+        content.push(
+          <p key={lineIndex} style={{ margin: "4px 0", lineHeight: "1.6" }}>
+            {parseInline(line)}
+          </p>
+        );
+      }
+    }
+  }
+  
+  if (listItems.length > 0) {
+    content.push(
+      <ul key="list-final" style={{ margin: "8px 0", paddingLeft: "20px", listStyleType: "disc" }}>
+        {listItems}
+      </ul>
+    );
+  }
+  
+  return <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>{content}</div>;
+}
+
 function buildFixGuide(issue = {}) {
   const message = `${issue.message || ""}`.toLowerCase();
   const code = `${issue.code || ""}`.toLowerCase();
@@ -319,6 +795,7 @@ function buildFixGuide(issue = {}) {
     return {
       title: "API key missing",
       focus: "providers",
+      command: "Open Settings, pick the provider, paste the API key, then save.",
       steps: [
         "Open Settings.",
         "Pick the right AI provider.",
@@ -333,6 +810,7 @@ function buildFixGuide(issue = {}) {
     return {
       title: "DB setup missing",
       focus: "databases",
+      command: "Open Settings, pick the database, add the connection string, then save.",
       steps: [
         "Open Settings.",
         "Pick the database.",
@@ -347,6 +825,7 @@ function buildFixGuide(issue = {}) {
     return {
       title: "Embedding path broke",
       focus: "databases",
+      command: "Open the vector node and switch the embedding provider to MongoDB Embeddings.",
       steps: [
         "Open the vector node.",
         "Switch Embedding Provider to MongoDB Embeddings.",
@@ -361,6 +840,7 @@ function buildFixGuide(issue = {}) {
     return {
       title: "Pick DB first",
       focus: "databases",
+      command: "Open the vector node and choose a database before running again.",
       steps: [
         "Open the vector node.",
         "Choose a database in the node panel.",
@@ -374,6 +854,7 @@ function buildFixGuide(issue = {}) {
     return {
       title: "No output",
       focus: "settings",
+      command: "Add an Output node and wire the last step into it.",
       steps: [
         "Check the flow has an Output node.",
         "Wire the last node into it.",
@@ -383,27 +864,59 @@ function buildFixGuide(issue = {}) {
     };
   }
 
-  return {
-    title: "Need a fix",
-    focus: "providers",
-    steps: [
-      "Open Settings.",
-      "Check provider and database values.",
-      "Save settings.",
-      "Run again."
-    ],
-    action: "Open Settings"
-  };
+  return null;
+}
+
+function summarizeErrorDetail(detail) {
+  if (!detail) return "Run failed.";
+
+  if (typeof detail === "string") {
+    return detail.trim() || "Run failed.";
+  }
+
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .slice(0, 3)
+      .map((item) => summarizeErrorDetail(item))
+      .filter(Boolean);
+    return parts.length ? parts.join(" | ") : "Run failed.";
+  }
+
+  if (typeof detail === "object") {
+    if (typeof detail.detail === "string") return detail.detail.trim() || "Run failed.";
+    if (Array.isArray(detail.detail)) return summarizeErrorDetail(detail.detail);
+    if (typeof detail.message === "string") return detail.message.trim() || "Run failed.";
+    if (typeof detail.error === "string") return detail.error.trim() || "Run failed.";
+    if (Array.isArray(detail.errors)) return summarizeErrorDetail(detail.errors);
+    if (detail.loc && detail.msg) {
+      const loc = Array.isArray(detail.loc)
+        ? detail.loc.filter((part) => part !== "body").join(".")
+        : String(detail.loc);
+      return `${loc ? `${loc}: ` : ""}${detail.msg}`;
+    }
+    if (typeof detail.code === "string" && typeof detail.title === "string") {
+      return `${detail.title}: ${detail.code}`;
+    }
+  }
+
+  return "Run failed.";
 }
 
 async function readErrorMessage(response) {
   try {
     const data = await response.json();
-    return data.detail || data.message || data.error || "Run failed.";
+    return summarizeErrorDetail(data.detail || data.message || data.error || data);
   } catch {
     try {
       const text = await response.text();
-      return text || "Run failed.";
+      const trimmed = `${text || ""}`.trim();
+      if (!trimmed) return "Run failed.";
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          return summarizeErrorDetail(JSON.parse(trimmed));
+        } catch {}
+      }
+      return trimmed;
     } catch {
       return "Run failed.";
     }
@@ -412,8 +925,11 @@ async function readErrorMessage(response) {
 
 export function App() {
   const storedAccount = readStoredJson(storageKey("account"), null);
-  const storedSession = readStoredJson(storageKey("session"), null);
-  const storedRuntime = readStoredJson(storageKey("runtime", storedSession?.username || "guest"), defaultRuntime);
+  const storedSession = readStoredJson(storageKey("session"), null) || { username: "workspace" };
+  const storedWorkspace = readStoredJson(storageKey("workspace", storedSession.username), null) || {};
+  const storedRuntime = readStoredJson(storageKey("runtime", storedSession.username), defaultRuntime) || defaultRuntime;
+  const storedUiPreferences = readStoredJson(storageKey("ui", storedSession.username), defaultUiPreferences) || defaultUiPreferences;
+  const storedTestCases = readStoredJson(storageKey("tests", storedSession.username), defaultTestCases) || defaultTestCases;
 
   const [account, setAccount] = useState(storedAccount);
   const [sessionUser, setSessionUser] = useState(storedSession);
@@ -421,12 +937,25 @@ export function App() {
   const [authForm, setAuthForm] = useState({ username: storedAccount?.username || "", password: "" });
   const [authError, setAuthError] = useState("");
   const [runtimeSaveStatus, setRuntimeSaveStatus] = useState("Saved locally");
-  const [activeView, setActiveView] = useState("ide");
-  const [nodes, setNodes] = useState(initialNodes);
-  const [links, setLinks] = useState(initialLinks);
-  const [graphId, setGraphId] = useState(null);
-  const [graphName, setGraphName] = useState("Simple Chatbot");
+  const [activeView, setActiveView] = useState(storedWorkspace?.activeView || "ide");
+  const [nodes, setNodes] = useState(() => normalizeNodes(storedWorkspace?.nodes || initialNodes));
+  const [links, setLinks] = useState(() => filterDuplicateLinks(storedWorkspace?.links || initialLinks));
+  const [graphId, setGraphId] = useState(storedWorkspace?.graphId || null);
+  const [graphName, setGraphName] = useState(storedWorkspace?.graphName || "New Workflow");
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [tempName, setTempName] = useState(storedWorkspace?.graphName || "New Workflow");
   const [savedFlows, setSavedFlows] = useState([]);
+  const [emptyCanvasPrompt, setEmptyCanvasPrompt] = useState("");
+  const [canvasMode, setCanvasMode] = useState("select");
+
+  function handleEmptyCanvasSubmit(promptText) {
+    if (!promptText.trim()) return;
+    setChatOpen(true);
+    setChatMode("copilot");
+    setChatInput("");
+    sendCopilotInput(promptText);
+    setEmptyCanvasPrompt("");
+  }
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMode, setChatMode] = useState("tester");
   const [chatMessages, setChatMessages] = useState([
@@ -439,6 +968,30 @@ export function App() {
   const [nodeDbInfo, setNodeDbInfo] = useState({ suggested_setup: "" });
   const [lastExecutionIssue, setLastExecutionIssue] = useState(null);
   const [settingsFocus, setSettingsFocus] = useState(null);
+
+  const [viewport, setViewport] = useState(storedWorkspace?.viewport || { x: 16, y: 30, scale: 0.52 });
+  const [selectedId, setSelectedId] = useState(storedWorkspace?.selectedId || storedWorkspace?.nodes?.[0]?.id || "prompt-1");
+  const [selectedLinkId, setSelectedLinkId] = useState(storedWorkspace?.selectedLinkId || null);
+  const [dragging, setDragging] = useState(null);
+  const [linkDraft, setLinkDraft] = useState(null);
+  const [hoverPort, setHoverPort] = useState(null);
+  const [pointerWorld, setPointerWorld] = useState(null);
+  const [status, setStatus] = useState("Ready");
+  const [executionLog, setExecutionLog] = useState(["Execution engine idle."]);
+  const [nodeStates, setNodeStates] = useState({});
+  const [nodeOutputs, setNodeOutputs] = useState({});
+  const [executionActive, setExecutionActive] = useState(false);
+  const [currentExecutionNode, setCurrentExecutionNode] = useState(null);
+  const [executionProgress, setExecutionProgress] = useState({ current: 0, total: 0 });
+  const [compiledCode, setCompiledCode] = useState("");
+  const [runtime, setRuntime] = useState(storedRuntime);
+  const [uiPreferences, setUiPreferences] = useState(normalizeUiPreferences(storedUiPreferences));
+  const [lastExecutionReplay, setLastExecutionReplay] = useState(null);
+  const [testCases, setTestCases] = useState(storedTestCases);
+  const [testResults, setTestResults] = useState([]);
+  const [testRunning, setTestRunning] = useState(false);
+  const canvasRef = useRef(null);
+  const panRef = useRef(null);
 
 
 
@@ -458,6 +1011,56 @@ export function App() {
     fetchFlows();
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const activeEl = document.activeElement;
+      const isTyping = activeEl && (
+        activeEl.tagName === "INPUT" ||
+        activeEl.tagName === "TEXTAREA" ||
+        activeEl.tagName === "SELECT" ||
+        activeEl.isContentEditable
+      );
+
+      // Global save shortcut (Ctrl+S / Cmd+S)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        saveGraph();
+        return;
+      }
+
+      if (isTyping) {
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+
+      // Tool switching
+      if (key === "h") {
+        setCanvasMode("hand");
+      } else if (key === "v") {
+        setCanvasMode("select");
+      }
+
+      // Escape to deselect
+      if (e.key === "Escape") {
+        setSelectedId(null);
+        setSelectedLinkId(null);
+      }
+
+      // Delete / Backspace to delete active node or link
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedId) {
+          deleteNode(selectedId);
+        } else if (selectedLinkId) {
+          deleteSelectedLink();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedId, selectedLinkId]);
+
   async function loadGraphById(id) {
     setStatus(`Loading flow ${id}...`);
     try {
@@ -466,6 +1069,7 @@ export function App() {
         const data = await response.json();
         setGraphId(data.id);
         setGraphName(data.name || "Untitled Flow");
+        setTempName(data.name || "Untitled Flow");
         setNodes(normalizeNodes(data.nodes || []));
         setLinks(filterDuplicateLinks(data.links || []));
         setActiveView("ide");
@@ -503,48 +1107,61 @@ export function App() {
     }
   }
 
-  const [viewport, setViewport] = useState({ x: 16, y: 30, scale: 0.52 });
-  const [selectedId, setSelectedId] = useState("prompt-1");
-  const [selectedLinkId, setSelectedLinkId] = useState(null);
-  const [dragging, setDragging] = useState(null);
-  const [linkDraft, setLinkDraft] = useState(null);
-  const [hoverPort, setHoverPort] = useState(null);
-  const [pointerWorld, setPointerWorld] = useState(null);
-  const [status, setStatus] = useState("Ready");
-  const [executionLog, setExecutionLog] = useState(["Execution engine idle."]);
-  const [nodeStates, setNodeStates] = useState({});
-  const [nodeOutputs, setNodeOutputs] = useState({});
-  const [executionActive, setExecutionActive] = useState(false);
-  const [currentExecutionNode, setCurrentExecutionNode] = useState(null);
-  const [executionProgress, setExecutionProgress] = useState({ current: 0, total: 0 });
-  const [compiledCode, setCompiledCode] = useState("");
-  const [runtime, setRuntime] = useState(storedRuntime);
-  const canvasRef = useRef(null);
-  const panRef = useRef(null);
+  const workspaceUser = sessionUser?.username || "workspace";
 
   useEffect(() => {
-    if (!sessionUser?.username) return;
-    setRuntime(readStoredJson(storageKey("runtime", sessionUser.username), defaultRuntime));
-  }, [sessionUser?.username]);
+    writeStoredJson(storageKey("workspace", workspaceUser), {
+      graphId,
+      graphName,
+      nodes,
+      links,
+      viewport,
+      selectedId,
+      selectedLinkId,
+      activeView
+    });
+  }, [graphId, graphName, nodes, links, viewport, selectedId, selectedLinkId, activeView, workspaceUser]);
 
   useEffect(() => {
-    if (!sessionUser?.username) return;
-    writeStoredJson(storageKey("runtime", sessionUser.username), runtime);
+    writeStoredJson(storageKey("runtime", workspaceUser), runtime);
     setRuntimeSaveStatus("Saved locally");
-  }, [runtime, sessionUser?.username]);
+  }, [runtime, workspaceUser]);
+
+  useEffect(() => {
+    writeStoredJson(storageKey("ui", workspaceUser), uiPreferences);
+  }, [uiPreferences, workspaceUser]);
+
+  useEffect(() => {
+    writeStoredJson(storageKey("tests", workspaceUser), testCases);
+  }, [testCases, workspaceUser]);
 
   function saveRuntimeNow() {
-    if (!sessionUser?.username) return;
-    writeStoredJson(storageKey("runtime", sessionUser.username), runtime);
+    writeStoredJson(storageKey("runtime", workspaceUser), runtime);
     setRuntimeSaveStatus("Saved locally");
   }
 
   function resetRuntime() {
     setRuntime(defaultRuntime);
-    if (sessionUser?.username) {
-      writeStoredJson(storageKey("runtime", sessionUser.username), defaultRuntime);
-    }
+    writeStoredJson(storageKey("runtime", workspaceUser), defaultRuntime);
     setRuntimeSaveStatus("Reset to blank.");
+  }
+
+  function applySimplifyPreset(nextValue) {
+    setUiPreferences((current) => {
+      const next = {
+        ...current,
+        simplifyEverything: nextValue
+      };
+
+      if (nextValue) {
+        next.compactLayout = true;
+        next.readableText = true;
+        next.reduceMotion = true;
+        next.hideAdvancedPanels = true;
+      }
+
+      return next;
+    });
   }
 
   function submitAuth() {
@@ -588,11 +1205,67 @@ export function App() {
   }
 
   const graphNodes = useMemo(() => normalizeNodes(nodes), [nodes]);
+  const sortedGraphNodes = useMemo(() => {
+    try {
+      const order = topologicalOrder(graphNodes, links);
+      const nMap = new Map(graphNodes.map((n) => [n.id, n]));
+      return order.map((id) => nMap.get(id)).filter(Boolean);
+    } catch {
+      return [...graphNodes].sort((a, b) => {
+        const ax = a.position?.x ?? 0;
+        const bx = b.position?.x ?? 0;
+        if (ax !== bx) return ax - bx;
+        return (a.position?.y ?? 0) - (b.position?.y ?? 0);
+      });
+    }
+  }, [graphNodes, links]);
   const nodeMap = useMemo(() => new Map(graphNodes.map((node) => [node.id, node])), [graphNodes]);
   const selectedNode = nodeMap.get(selectedId);
   const selectedLink = links.find((link) => link.id === selectedLinkId);
   const hasCycle = useMemo(() => wouldCreateCycle(graphNodes, links), [graphNodes, links]);
   const fixGuide = lastExecutionIssue ? buildFixGuide(lastExecutionIssue) : null;
+  const workflowHealth = useMemo(() => {
+    const issues = buildWorkflowHealthIssues(graphNodes, links, runtime);
+    const score = Math.max(
+      0,
+      100 - issues.filter((issue) => issue.severity === "error").length * 20 - issues.filter((issue) => issue.severity === "warning").length * 8 - issues.filter((issue) => issue.severity === "info").length * 2
+    );
+    return {
+      issues,
+      score,
+      errors: issues.filter((issue) => issue.severity === "error").length,
+      warnings: issues.filter((issue) => issue.severity === "warning").length,
+      info: issues.filter((issue) => issue.severity === "info").length
+    };
+  }, [graphNodes, links, runtime]);
+
+  function graphWithInputValue(nodesList, value) {
+    let applied = false;
+    return normalizeNodes(
+      nodesList.map((node) => {
+        if (!applied && node.type === "input") {
+          applied = true;
+          return { ...node, data: { ...node.data, value } };
+        }
+        return node;
+      })
+    );
+  }
+
+  async function executeWorkflowRun({
+    graphNodesOverride = graphNodes,
+    linksOverride = links,
+    runtimeOverride = runtime,
+    onEvent,
+    signal
+  } = {}) {
+    return streamGraphExecution({
+      graph: buildGraphPayload(graphName, graphNodesOverride, linksOverride),
+      runtime: buildExecutionRuntime(graphNodesOverride, runtimeOverride),
+      onEvent,
+      signal
+    });
+  }
 
   useEffect(() => {
     const providerList = runtime.providers || [];
@@ -635,7 +1308,7 @@ export function App() {
   useEffect(() => {
     if (selectedNode && (selectedNode.type === "llm" || selectedNode.type === "subagent" || selectedNode.type === "vector")) {
       const activeProvId = selectedNode.data.provider || "openai";
-      const provConf = runtime.providers.find(p => p.id === activeProvId);
+      const provConf = (runtime.providers || []).find(p => p.id === activeProvId);
       const isEmbedding = selectedNode.type === "vector";
 
       if (isEmbedding && activeProvId === "mongodb") {
@@ -665,7 +1338,7 @@ export function App() {
           selectedNode &&
           (selectedNode.type === "llm" || selectedNode.type === "subagent") &&
           recommended &&
-          (!currentModel || !modelList.includes(currentModel) || currentModel !== recommended)
+          (!currentModel || (modelList.length > 0 && !modelList.includes(currentModel) && currentModel !== recommended))
         );
 
         if (shouldAutoPick) {
@@ -691,7 +1364,7 @@ export function App() {
   useEffect(() => {
     if (selectedNode && selectedNode.type === "vector") {
       const activeDbId = selectedNode.data.vectorDatabase;
-      const dbConf = runtime.databases.find(db => db.id === activeDbId);
+      const dbConf = (runtime.databases || []).find(db => db.id === activeDbId);
       if (dbConf) {
         fetch(`${API_BASE}/runtime/databases/info`, {
           method: "POST",
@@ -720,6 +1393,10 @@ export function App() {
   function beginNodeDrag(event, node) {
     if (event.button !== 0) return;
     event.stopPropagation();
+    if (canvasMode === "hand") {
+      panRef.current = { x: event.clientX, y: event.clientY, start: viewport };
+      return;
+    }
     setSelectedId(node.id);
     setSelectedLinkId(null);
     const world = toWorld(event.clientX, event.clientY);
@@ -941,8 +1618,10 @@ export function App() {
   }
 
   useEffect(() => {
-    autoLayoutNodes();
-    // one tidy start for the first canvas load
+    if (!storedWorkspace?.nodes?.length) {
+      autoLayoutNodes();
+    }
+    // one tidy start for the first canvas load when there is no saved draft
   }, []);
 
   function deleteSelectedLink() {
@@ -986,6 +1665,16 @@ export function App() {
       base.data = { role: "Specialist", handoff: "Return a concise result to the parent agent." };
     }
     if (type === "vector") base.data = { collection: "knowledge_base", index: "vector_index", limit: 4, provider: "mongodb", model: "mongodb-embedding" };
+    if (type === "datastore") {
+      base.label = "Data Store";
+      base.data = { operation: "save", collection: "data_store", key: "text", database: "" };
+    }
+    if (type === "document_loader") {
+      base.label = "Document Loader";
+      base.inputs = [{ id: "url", label: "url" }];
+      base.outputs = [{ id: "text", label: "text" }];
+      base.data = { source_type: "url", url: "https://raw.githubusercontent.com/run-llama/llama_index/main/README.md", text: "" };
+    }
     if (type === "router") base.data = { condition: "len(input) > 10" };
     if (type === "code") base.data = { code: "output = input.upper()" };
     if (type === "custom") {
@@ -999,6 +1688,9 @@ export function App() {
   }
 
   function createNewAgent() {
+    setGraphId(null);
+    setGraphName("New Workflow");
+    setTempName("New Workflow");
     setNodes([]);
     setLinks([]);
     setSelectedId(null);
@@ -1009,13 +1701,76 @@ export function App() {
   }
 
   function applyTemplate(template) {
+    setGraphId(null);
     setNodes(normalizeNodes(template.nodes));
     setLinks(filterDuplicateLinks(template.links));
+    setGraphName(template.name || "New Workflow");
+    setTempName(template.name || "New Workflow");
     setSelectedId(template.nodes[0]?.id || null);
     setSelectedLinkId(null);
     setViewport({ x: 16, y: 30, scale: 0.52 });
     setActiveView("ide");
     setStatus(`${template.name} template loaded.`);
+  }
+
+  function optimizeImportedWorkflow(workflow) {
+    const nextNodes = normalizeNodes(Array.isArray(workflow?.nodes) ? workflow.nodes : []);
+    const nodeIds = new Set(nextNodes.map((node) => node.id));
+    let nextLinks = filterDuplicateLinks(
+      (Array.isArray(workflow?.links) ? workflow.links : []).filter(
+        (link) => nodeIds.has(link.sourceNode) && nodeIds.has(link.targetNode)
+      )
+    );
+
+    const hasOutputNode = nextNodes.some((node) => node.type === "output");
+    if (!hasOutputNode && nextNodes.length > 0) {
+      const attachSource = [...nextNodes].reverse().find((node) => node.outputs?.length) || nextNodes[nextNodes.length - 1];
+      const sourcePort = attachSource?.outputs?.[0]?.id || "completion";
+      const outputId = `output-${Date.now()}`;
+      const x = (attachSource?.position?.x ?? 0) + 360;
+      const y = attachSource?.position?.y ?? 0;
+      nextNodes.push({
+        id: outputId,
+        type: "output",
+        label: "Final Output",
+        position: { x, y },
+        inputs: [{ id: "input", label: "input" }],
+        outputs: [],
+        data: {}
+      });
+      nextLinks.push({
+        id: `link-${Date.now()}`,
+        sourceNode: attachSource.id,
+        sourcePort,
+        targetNode: outputId,
+        targetPort: "input",
+        active: true
+      });
+    }
+
+    return {
+      name: `${workflow?.name || ""}`.trim(),
+      nodes: nextNodes,
+      links: nextLinks
+    };
+  }
+
+  function loadWorkflowIntoCanvas(workflow, message = "Workflow loaded.") {
+    const next = optimizeImportedWorkflow(workflow);
+    const firstId = next.nodes[0]?.id || null;
+    setGraphId(null);
+    setNodes(next.nodes);
+    setLinks(next.links);
+    setSelectedId(firstId);
+    setSelectedLinkId(null);
+    setViewport({ x: 16, y: 30, scale: 0.52 });
+    setActiveView("ide");
+    if (next.name) {
+      setGraphName(next.name);
+      setTempName(next.name);
+    }
+    setStatus(message);
+    setTimeout(() => fitContent(next.nodes), 60);
   }
 
   function addStarterNode() {
@@ -1057,8 +1812,9 @@ export function App() {
       setLastExecutionIssue({ code: "cycle", label: "Workflow", message: "Remove the red cycle link first." });
       return;
     }
-    
-    // Reset execution and node states
+
+    const trace = [];
+    const startedAt = Date.now();
     setNodeStates({});
     setNodeOutputs({});
     setLastExecutionIssue(null);
@@ -1068,142 +1824,115 @@ export function App() {
     setExecutionLog(["Starting SSE execution..."]);
     setStatus("Executing graph...");
 
-    const response = await fetch(`${API_BASE}/execute/stream`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        graph: buildGraphPayload(graphName, graphNodes, links),
-        runtime: buildExecutionRuntime(graphNodes, runtime)
-      })
-    });
-    if (!response.ok) {
-      const message = await readErrorMessage(response);
-      setStatus(`Error: ${message}`);
-      setLastExecutionIssue({
-        code: message.toLowerCase().includes("api key") ? "missing_provider_key" : message.toLowerCase().includes("connection string") ? "missing_vector_db" : "runtime_error",
-        label: "Workflow",
-        message
-      });
-      setExecutionActive(false);
-      return;
-    }
-    if (!response.body) {
-      setStatus("Streaming unavailable.");
-      setExecutionActive(false);
-      return;
-    }
+    try {
+      const result = await executeWorkflowRun({
+        onEvent: (data) => {
+          trace.push({ ...data, at: Date.now() });
+          const { event, node, label, step, total, chunk: tokenChunk, durationMs, message, condition } = data;
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+          setExecutionLog((current) => [
+            ...current.slice(-15),
+            `[${event}] ${node || ""} ${message || label || tokenChunk || ""}`
+          ]);
 
-    const parseAndProcessEvent = (line) => {
-      const payloadStr = line.replace("data:", "").trim();
-      try {
-        const data = JSON.parse(payloadStr);
-        const { event, node, label, step, total, chunk: tokenChunk, durationMs, message, condition } = data;
-
-        setExecutionLog((current) => [
-          ...current.slice(-15),
-          `[${event}] ${node || ''} ${message || label || tokenChunk || ''}`
-        ]);
-
-        if (event === "node:start") {
-          setNodeStates((prev) => ({ ...prev, [node]: "running" }));
-          setExecutionProgress({ current: step + 1, total });
-          setCurrentExecutionNode(node);
-          setStatus(`Running node: ${label || node}`);
-        } else if (event === "token") {
-          setNodeOutputs((prev) => {
-            const nodeOut = prev[node] || { chunks: [], result: "" };
-            const updatedChunks = [...nodeOut.chunks, tokenChunk];
-            return {
+          if (event === "node:start") {
+            setNodeStates((prev) => ({ ...prev, [node]: "running" }));
+            setExecutionProgress({ current: step + 1, total });
+            setCurrentExecutionNode(node);
+            setStatus(`Running node: ${label || node}`);
+          } else if (event === "node:skipped") {
+            setNodeStates((prev) => ({ ...prev, [node]: "skipped" }));
+          } else if (event === "token") {
+            setNodeOutputs((prev) => {
+              const nodeOut = prev[node] || { chunks: [], result: "" };
+              const updatedChunks = [...nodeOut.chunks, tokenChunk];
+              return {
+                ...prev,
+                [node]: {
+                  ...nodeOut,
+                  chunks: updatedChunks,
+                  result: updatedChunks.join("")
+                }
+              };
+            });
+          } else if (event === "router:result") {
+            setNodeOutputs((prev) => ({
               ...prev,
               [node]: {
-                ...nodeOut,
-                chunks: updatedChunks,
-                result: updatedChunks.join("")
+                ...(prev[node] || { chunks: [], result: "" }),
+                routerResult: condition
               }
-            };
-          });
-        } else if (event === "router:result") {
-          setNodeOutputs((prev) => ({
-            ...prev,
-            [node]: {
-              ...(prev[node] || { chunks: [], result: "" }),
-              routerResult: condition
+            }));
+          } else if (event === "node:output") {
+            setNodeOutputs((prev) => ({
+              ...prev,
+              [node]: {
+                ...(prev[node] || { chunks: [], result: "" }),
+                result: data.output
+              }
+            }));
+          } else if (event === "node:complete") {
+            setNodeStates((prev) => ({ ...prev, [node]: "completed" }));
+            setNodeOutputs((prev) => ({
+              ...prev,
+              [node]: {
+                ...(prev[node] || { chunks: [], result: "" }),
+                duration: durationMs
+              }
+            }));
+          } else if (event === "node:error") {
+            setNodeStates((prev) => ({ ...prev, [node]: "error" }));
+            setNodeOutputs((prev) => ({
+              ...prev,
+              [node]: {
+                ...(prev[node] || { chunks: [], result: "" }),
+                error: message,
+                duration: durationMs
+              }
+            }));
+          } else if (event === "complete") {
+            setExecutionActive(false);
+            setCurrentExecutionNode(null);
+            if (data.errorCount > 0) {
+              const firstError = data.errors?.[0];
+              setStatus(`Error: ${firstError?.label || firstError?.node || "node"} - ${firstError?.message || "unknown"}`);
+              setLastExecutionIssue(firstError || { code: "runtime_error", label: "Workflow", message: "Flow failed." });
+            } else if (data.hasOutput) {
+              setStatus("Execution complete.");
+              setLastExecutionIssue(null);
+            } else {
+              setStatus("No output came out.");
+              setLastExecutionIssue({ code: "no_output", label: "Workflow", message: "No output came out." });
             }
-          }));
-        } else if (event === "node:output") {
-          setNodeOutputs((prev) => ({
-            ...prev,
-            [node]: {
-              ...(prev[node] || { chunks: [], result: "" }),
-              result: data.output // Store the output content
-            }
-          }));
-        } else if (event === "node:complete") {
-          setNodeStates((prev) => ({ ...prev, [node]: "completed" }));
-          setNodeOutputs((prev) => ({
-            ...prev,
-            [node]: {
-              ...(prev[node] || { chunks: [], result: "" }),
-              duration: durationMs
-            }
-          }));
-        } else if (event === "node:error") {
-          setNodeStates((prev) => ({ ...prev, [node]: "error" }));
-          setNodeOutputs((prev) => ({
-            ...prev,
-            [node]: {
-              ...(prev[node] || { chunks: [], result: "" }),
-              error: message,
-              duration: durationMs
-            }
-          }));
-        } else if (event === "complete") {
-          setExecutionActive(false);
-          setCurrentExecutionNode(null);
-          if (data.errorCount > 0) {
-            const firstError = data.errors?.[0];
-            setStatus(`Error: ${firstError?.label || firstError?.node || "node"} - ${firstError?.message || "unknown"}`);
-            setLastExecutionIssue(firstError || { code: "runtime_error", label: "Workflow", message: "Flow failed." });
-          } else if (data.hasOutput) {
-            setStatus("Execution complete.");
-            setLastExecutionIssue(null);
-          } else {
-            setStatus("No output came out.");
-            setLastExecutionIssue({ code: "no_output", label: "Workflow", message: "No output came out." });
           }
         }
-      } catch (e) {
-        console.error("Failed to parse SSE payload:", payloadStr, e);
-      }
-    };
+      });
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const chunks = buffer.split("\n\n");
-      buffer = chunks.pop();
-      for (const chunk of chunks) {
-        const line = chunk.split("\n").find((entry) => entry.startsWith("data:"));
-        if (line) {
-          parseAndProcessEvent(line);
-        }
+      if (!result.ok) {
+        const message = result.errorMessage || "Run failed.";
+        setStatus(`Error: ${message}`);
+        setLastExecutionIssue({
+          code: message.toLowerCase().includes("api key") ? "missing_provider_key" : message.toLowerCase().includes("connection string") ? "missing_vector_db" : "runtime_error",
+          label: "Workflow",
+          message
+        });
+        return;
       }
+
+      setLastExecutionReplay({
+        source: "workflow",
+        startedAt,
+        summary: buildReplaySummary(trace, result.finalEvent),
+        events: trace
+      });
+    } catch (err) {
+      console.error("Execution error:", err);
+      setStatus(`Execution error: ${err?.message || "connection failed"}`);
+      setLastExecutionIssue({ code: "runtime_error", label: "Workflow", message: err?.message || "Execution connection failed." });
+    } finally {
+      setExecutionActive(false);
+      setCurrentExecutionNode(null);
     }
-
-    if (buffer.trim()) {
-      const line = buffer.split("\n").find((entry) => entry.startsWith("data:"));
-      if (line) {
-        parseAndProcessEvent(line);
-      }
-    }
-
-    setExecutionActive(false);
-    setCurrentExecutionNode(null);
   }
 
   async function sendChatInput(queryText) {
@@ -1243,45 +1972,17 @@ export function App() {
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 45000);
+    const trace = [];
+    const startedAt = Date.now();
 
     try {
-      const response = await fetch(`${API_BASE}/execute/stream`, {
-        method: "POST",
+      const result = await executeWorkflowRun({
+        graphNodesOverride: normalizeNodes(updatedNodes),
+        linksOverride: links,
+        runtimeOverride: runtime,
         signal: controller.signal,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          graph: buildGraphPayload(graphName, normalizeNodes(updatedNodes), links),
-          runtime: buildExecutionRuntime(updatedNodes, runtime)
-        })
-      });
-      if (!response.ok) {
-        const message = await readErrorMessage(response);
-        setLastExecutionIssue({
-          code: message.toLowerCase().includes("api key") ? "missing_provider_key" : message.toLowerCase().includes("connection string") ? "missing_vector_db" : "runtime_error",
-          label: "Workflow",
-          message
-        });
-        setChatMessages((prev) => prev.map((m) => m.id === responseId ? { ...m, text: `Error: ${message}`, isStreaming: false } : m));
-        setChatLoading(false);
-        setExecutionActive(false);
-        return;
-      }
-
-      if (!response.body) {
-        setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: "Error: execution stream unavailable.", isStreaming: false } : m));
-        setChatLoading(false);
-        setExecutionActive(false);
-        return;
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      const processEvent = (line) => {
-        const payloadStr = line.replace("data:", "").trim();
-        try {
-          const data = JSON.parse(payloadStr);
+        onEvent: (data) => {
+          trace.push({ ...data, at: Date.now() });
           const { event, node, label, step, total, chunk: tokenChunk, durationMs, message, condition } = data;
 
           if (event === "node:start") {
@@ -1292,7 +1993,7 @@ export function App() {
             setNodeStates((prev) => ({ ...prev, [node]: "skipped" }));
           } else if (event === "token" && tokenChunk) {
             currentText += tokenChunk;
-            setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
+            setChatMessages((prev) => prev.map((m) => m.id === responseId ? { ...m, text: currentText } : m));
             setNodeOutputs((prev) => {
               const nodeOut = prev[node] || { chunks: [], result: "" };
               const updatedChunks = [...nodeOut.chunks, tokenChunk];
@@ -1304,7 +2005,7 @@ export function App() {
           } else if (event === "node:output" && data.output) {
             if (!currentText) {
               currentText = String(data.output);
-              setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
+              setChatMessages((prev) => prev.map((m) => m.id === responseId ? { ...m, text: currentText } : m));
             }
             setNodeOutputs((prev) => ({
               ...prev,
@@ -1319,7 +2020,7 @@ export function App() {
           } else if (event === "node:error") {
             setNodeStates((prev) => ({ ...prev, [node]: "error" }));
             currentText += `\n\nError in step "${label || node}": ${message}`;
-            setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
+            setChatMessages((prev) => prev.map((m) => m.id === responseId ? { ...m, text: currentText } : m));
           } else if (event === "complete") {
             setExecutionActive(false);
             setCurrentExecutionNode(null);
@@ -1336,31 +2037,31 @@ export function App() {
                 currentText = "No output came out.";
                 setLastExecutionIssue({ code: "no_output", label: "Workflow", message: "No output came out." });
               }
-              setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
+              setChatMessages((prev) => prev.map((m) => m.id === responseId ? { ...m, text: currentText } : m));
             }
           }
-        } catch (e) {
-          console.error(e);
         }
-      };
+      });
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const chunks = buffer.split("\n\n");
-        buffer = chunks.pop();
-        for (const chunk of chunks) {
-          const line = chunk.split("\n").find((entry) => entry.startsWith("data:"));
-          if (line) processEvent(line);
-        }
+      if (!result.ok) {
+        const message = result.errorMessage || "Execution stream unavailable.";
+        setLastExecutionIssue({
+          code: message.toLowerCase().includes("api key") ? "missing_provider_key" : message.toLowerCase().includes("connection string") ? "missing_vector_db" : "runtime_error",
+          label: "Workflow",
+          message
+        });
+        setChatMessages((prev) => prev.map((m) => m.id === responseId ? { ...m, text: `Error: ${message}`, isStreaming: false } : m));
+        setChatLoading(false);
+        setExecutionActive(false);
+        return;
       }
 
-      if (buffer.trim()) {
-        const line = buffer.split("\n").find((entry) => entry.startsWith("data:"));
-        if (line) processEvent(line);
-      }
-
+      setLastExecutionReplay({
+        source: "tester",
+        startedAt,
+        summary: buildReplaySummary(trace, result.finalEvent),
+        events: trace
+      });
     } catch (err) {
       console.error(err);
       const message = err?.name === "AbortError" ? "Workflow timed out." : (err?.message || "Connection error during workflow execution.");
@@ -1371,6 +2072,85 @@ export function App() {
       setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, isStreaming: false } : m));
       setChatLoading(false);
       setExecutionActive(false);
+    }
+  }
+
+  async function runTestHarness() {
+    const inputNode = graphNodes.find((node) => node.type === "input");
+    if (!inputNode) {
+      setStatus("Add an input node before running tests.");
+      return;
+    }
+
+    if (hasCycle || links.some((link) => link.invalid)) {
+      setStatus("Execution locked: remove invalid cycle paths first.");
+      setLastExecutionIssue({ code: "cycle", label: "Workflow", message: "Remove the red cycle link first." });
+      return;
+    }
+
+    setTestRunning(true);
+    setStatus("Running test harness...");
+    setTestResults([]);
+
+    const results = [];
+    let passedCount = 0;
+
+    try {
+      for (const testCase of testCases) {
+        const trace = [];
+        const startedAt = Date.now();
+        const testNodes = graphWithInputValue(graphNodes, testCase.input);
+        const result = await executeWorkflowRun({
+          graphNodesOverride: testNodes,
+          linksOverride: links,
+          runtimeOverride: runtime,
+          onEvent: (data) => {
+            trace.push({ ...data, at: Date.now() });
+          }
+        });
+
+        const outputText = result.ok ? (result.finalEvent?.output || "") : "";
+        const expectedText = `${testCase.expected || ""}`.trim().toLowerCase();
+        const normalizedOutput = `${outputText || ""}`.trim().toLowerCase();
+        const passed = result.ok && (!expectedText || normalizedOutput.includes(expectedText));
+        const summary = buildReplaySummary(trace, result.finalEvent);
+
+        if (passed) passedCount += 1;
+
+        results.push({
+          ...testCase,
+          passed,
+          output: outputText,
+          error: result.ok ? "" : (result.errorMessage || "Run failed."),
+          summary,
+          durationMs: Date.now() - startedAt
+        });
+
+        setTestResults([...results]);
+        setLastExecutionReplay({
+          source: "test",
+          startedAt,
+          summary,
+          events: trace
+        });
+
+        if (!result.ok) {
+          const errorText = `${result.errorMessage || ""}`.toLowerCase();
+          setLastExecutionIssue({
+            code: errorText.includes("api key") ? "missing_provider_key" : errorText.includes("connection string") ? "missing_vector_db" : "runtime_error",
+            label: "Workflow",
+            message: result.errorMessage || "Test run failed."
+          });
+        }
+      }
+
+      if (passedCount === results.length) {
+        setLastExecutionIssue(null);
+      }
+
+      setStatus(`Test harness finished: ${passedCount}/${results.length} passed.`);
+    } finally {
+      setTestRunning(false);
     }
   }
 
@@ -1387,8 +2167,12 @@ export function App() {
     setChatMessages((prev) => [...prev, { id: responseId, role: "assistant", text: "", isStreaming: true }]);
     
 const systemPrompt = `You are PromptFlow Copilot, an expert AI assistant that helps users construct and refine LLM workflows in PromptFlow Studio.
-You can generate nodes and connections. Keep the workflow simple unless the user asks for retrieval, databases, or RAG. To create or modify a workflow, output a single JSON codeblock wrapped in \`\`\`json ... \`\`\` with this exact structure:
+You can generate nodes and connections. Prefer the smallest workflow that solves the task. Avoid extra nodes, duplicate links, disconnected nodes, and vague labels.
+If the workspace is in simplify mode, bias even harder toward fewer nodes, short labels, and very explicit defaults.
+If the user did not ask for retrieval, databases, or RAG, keep the flow to the simplest useful chain.
+To create or modify a workflow, output a single JSON codeblock wrapped in \`\`\`json ... \`\`\` with this exact structure:
 {
+  "name": "A short, clean, descriptive title of this workflow (e.g. News Summarizer or PDF Generator)",
   "nodes": [
     { "id": "input-1", "type": "input", "label": "User Input", "position": {"x": 60, "y": 240}, "inputs": [], "outputs": [{"id": "value", "label": "value"}], "data": {"key": "input", "value": "What is the refund policy?"} },
     { "id": "prompt-1", "type": "prompt", "label": "Prompt Template", "position": {"x": 420, "y": 240}, "inputs": [], "outputs": [{"id": "prompt", "label": "prompt"}], "data": {"template": "Answer this clearly: {{input}}"} },
@@ -1403,9 +2187,24 @@ You can generate nodes and connections. Keep the workflow simple unless the user
 }
 
 CRITICAL RULES:
-1. Keep duplicate links out. One exact source-port to target-port link is enough, but different ports between the same nodes are allowed.
-2. Use simple input -> prompt -> llm -> output flows unless the user clearly asks for retrieval or database context.
-Be helpful, professional, and explain what the generated workflow does.`;
+1. Every node in "nodes" MUST have a "type" string that is EXACTLY one of these lowercase values:
+   - "input" (User input)
+   - "prompt" (Prompt instructions / template)
+   - "llm" (Model response)
+   - "vector" (Vector Database search / retrieve)
+   - "datastore" (Database insert or query operation)
+   - "document_loader" (Fetch document from URL or static text)
+   - "output" (Final output)
+   - "router" (Conditional routing / branching)
+   - "subagent" (Autonomous sub-agent specialist)
+   - "code" (Python code transform)
+   - "custom" (Custom dynamic ports node)
+DO NOT capitalize node types (like "Input", "LLM") and do not use generic names not in this list.
+2. Keep duplicate links out. One exact source-port to target-port link is enough, but different ports between the same nodes are allowed.
+3. Use simple input -> prompt -> llm -> output flows unless the user clearly asks for retrieval or database context.
+4. If the flow can work with fewer nodes, use fewer nodes.
+5. Do not include any commentary outside the JSON block.
+Be helpful, professional, and keep the output focused on the JSON structure only.`;
 
     let timeoutId = null;
     try {
@@ -1427,7 +2226,6 @@ Be helpful, professional, and explain what the generated workflow does.`;
           runtime: buildExecutionRuntime(nodes, runtime)
         })
       });
-      clearTimeout(timeoutId);
       if (!response.ok) {
         const message = await readErrorMessage(response);
         setLastExecutionIssue({
@@ -1450,8 +2248,12 @@ Be helpful, professional, and explain what the generated workflow does.`;
       let buffer = "";
 
       const processLine = (line) => {
-        const payloadStr = line.replace("data:", "").trim();
-        if (!payloadStr) return;
+        let payloadStr = line;
+        if (payloadStr.startsWith("data: ")) {
+          payloadStr = payloadStr.slice(6);
+        } else if (payloadStr.startsWith("data:")) {
+          payloadStr = payloadStr.slice(5);
+        }
         currentText += payloadStr;
         setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, text: currentText } : m));
       };
@@ -1483,12 +2285,14 @@ Be helpful, professional, and explain what the generated workflow does.`;
       setChatMessages(prev => prev.map(m => m.id === responseId ? { ...m, isStreaming: false } : m));
       setChatLoading(false);
       
-      // Automatically load the generated workflow onto the canvas!
-      const workflow = parseJsonWorkflow(currentText);
-      if (workflow) {
-        setNodes(normalizeNodes(workflow.nodes));
-        setLinks(filterDuplicateLinks(workflow.links));
-        setStatus("Workflow built automatically on canvas!");
+      try {
+        // Automatically load the generated workflow onto the canvas!
+        const workflow = parseJsonWorkflow(currentText);
+        if (workflow) {
+          loadWorkflowIntoCanvas(workflow, "Workflow built automatically on canvas!");
+        }
+      } catch (workflowErr) {
+        console.error("Error auto-loading workflow from Copilot:", workflowErr);
       }
     }
   }
@@ -1545,13 +2349,81 @@ Be helpful, professional, and explain what the generated workflow does.`;
     return authScreen;
   }
 
+  const formatExecutionResult = (result) => {
+    if (!result) return "(Empty Output)";
+    try {
+      const stringified = typeof result === "string" ? result : JSON.stringify(result);
+      const parsed = JSON.parse(stringified);
+      return "```json\n" + JSON.stringify(parsed, null, 2) + "\n```";
+    } catch {
+      return String(result);
+    }
+  };
+
   return (
-    <div className={`app-shell ${chatOpen ? "chat-open" : ""}`}>
+    <div className={`app-shell ${chatOpen ? "chat-open" : ""} ${uiPreferences.simplifyEverything ? "simplify-mode" : ""} ${uiPreferences.compactLayout ? "compact-layout" : ""} ${uiPreferences.readableText ? "readable-text" : ""} ${uiPreferences.reduceMotion ? "reduce-motion" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <Waypoints size={22} />
           <strong>PromptFlow Studio</strong>
-          <span className="workflow-chip">{graphName}</span>
+          {isEditingName ? (
+            <input
+              className="workflow-chip-input"
+              value={tempName}
+              onChange={(e) => setTempName(e.target.value)}
+              onBlur={() => {
+                if (tempName.trim()) {
+                  setGraphName(tempName.trim());
+                }
+                setIsEditingName(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (tempName.trim()) {
+                    setGraphName(tempName.trim());
+                  }
+                  setIsEditingName(false);
+                } else if (e.key === "Escape") {
+                  setIsEditingName(false);
+                }
+              }}
+              autoFocus
+              style={{
+                background: "var(--surface-soft)",
+                border: "1px solid var(--blue)",
+                borderRadius: "16px",
+                padding: "4px 12px",
+                fontSize: "12px",
+                fontWeight: "600",
+                color: "var(--text)",
+                outline: "none",
+                width: "150px"
+              }}
+            />
+          ) : (
+            <span 
+              className="workflow-chip"
+              onDoubleClick={() => {
+                setTempName(graphName);
+                setIsEditingName(true);
+              }}
+              title="Double click to edit flow name"
+              style={{ cursor: "pointer", userSelect: "none" }}
+            >
+              {graphName}
+            </span>
+          )}
+          <nav>
+            {navItems.map((item) => (
+              <button 
+                key={item.id} 
+                className={activeView === item.id ? "active" : ""} 
+                onClick={() => { setActiveView(item.id); if (item.id === "flows") fetchFlows(); }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
         </div>
         <div className="top-actions">
           <label className="search"><Search size={15} /><input placeholder="Search prompts..." /></label>
@@ -1564,17 +2436,6 @@ Be helpful, professional, and explain what the generated workflow does.`;
         </div>
       </header>
 
-      <aside className="rail">
-        {navItems.map((item) => {
-          const Icon = item.id === "ide" ? Boxes : item.id === "flows" ? GitBranch : item.id === "templates" ? FileText : item.id === "settings" ? Database : Activity;
-          return (
-            <button key={item.id} className={activeView === item.id ? "rail-active" : ""} onClick={() => { setActiveView(item.id); if (item.id === "flows") fetchFlows(); }} title={item.label}>
-              <Icon size={19} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-      </aside>
 
 
       {activeView === "ide" ? (
@@ -1608,13 +2469,30 @@ Be helpful, professional, and explain what the generated workflow does.`;
 
       <main
         ref={canvasRef}
-        className="canvas"
+        className={`canvas mode-${canvasMode}`}
         onPointerDown={beginPan}
         onPointerMove={onPointerMove}
         onPointerUp={endPointer}
         onPointerLeave={endPointer}
         onWheel={onWheel}
       >
+        <div className="canvas-mode-selector">
+          <button 
+            title="Select Tool (V)" 
+            onClick={() => setCanvasMode("select")} 
+            className={canvasMode === "select" ? "active" : ""}
+          >
+            <MousePointer2 size={16} />
+          </button>
+          <button 
+            title="Hand / Pan Tool (H)" 
+            onClick={() => setCanvasMode("hand")} 
+            className={canvasMode === "hand" ? "active" : ""}
+          >
+            <Hand size={16} />
+          </button>
+        </div>
+
         {executionActive && (
           <div className="execution-progress-bar">
             <div 
@@ -1677,9 +2555,11 @@ Be helpful, professional, and explain what the generated workflow does.`;
                   key={link.id}
                   className={linkClass}
                   onPointerDown={(event) => {
-                    event.stopPropagation();
-                    setSelectedLinkId(link.id);
-                    setSelectedId(null);
+                    if (canvasMode !== "hand") {
+                      event.stopPropagation();
+                      setSelectedLinkId(link.id);
+                      setSelectedId(null);
+                    }
                   }}
                 >
                   <path className="link-hit" d={d} />
@@ -1705,12 +2585,57 @@ Be helpful, professional, and explain what the generated workflow does.`;
           </svg>
           {graphNodes.length === 0 && (
             <div className="empty-canvas">
-              <button onClick={addStarterNode}><Plus size={24} /></button>
-              <strong>Start your agent</strong>
-              <p>Add a first step, then drag from a node handle to connect agents, tools, and sub-agents.</p>
-              <div>
-                <button onClick={() => applyTemplate(workflowTemplates[1])}>Use sub-agent template</button>
-                <button onClick={() => setActiveView("templates")}>Browse templates</button>
+              <div className="empty-canvas-header">
+                <h2>Design Your PromptFlow Agent</h2>
+                <p>Use our next-gen AI builder or assemble your workflow visually using node templates.</p>
+              </div>
+              <div className="empty-canvas-body">
+                <div className="empty-canvas-col empty-canvas-ai">
+                  <h3><Sparkles size={14} /> Generate with AI</h3>
+                  <div className="ai-prompt-area">
+                    <textarea 
+                      className="ai-prompt-textarea"
+                      placeholder="Describe what your AI agent should do (e.g. 'Build a news summarizer pipeline that reads from Google news, runs it through LLM, and writes to MongoDB datastore')..."
+                      value={emptyCanvasPrompt}
+                      onChange={(e) => setEmptyCanvasPrompt(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          handleEmptyCanvasSubmit(emptyCanvasPrompt);
+                        }
+                      }}
+                    />
+                    <button 
+                      className="ai-generate-btn"
+                      onClick={() => handleEmptyCanvasSubmit(emptyCanvasPrompt)}
+                      disabled={!emptyCanvasPrompt.trim()}
+                      style={{ opacity: emptyCanvasPrompt.trim() ? 1 : 0.6, cursor: emptyCanvasPrompt.trim() ? "pointer" : "not-allowed" }}
+                    >
+                      <Sparkles size={14} /> Generate Workflow
+                    </button>
+                  </div>
+                  <div className="empty-canvas-suggestions">
+                    <span>💡 Try These Prompts</span>
+                    <div className="suggestion-pills">
+                      <button className="suggestion-pill" onClick={() => handleEmptyCanvasSubmit("Build a RAG pipeline that loads a PDF document loader, indexes it, and retrieves documents on query.")}>🔍 RAG Search Agent</button>
+                      <button className="suggestion-pill" onClick={() => handleEmptyCanvasSubmit("Create a news collector that gets 10 top articles, drafts meeting notes summarizing them, and stores the summary in a MongoDB collection.")}>📰 News Summarizer</button>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="empty-canvas-divider">
+                  <span>OR</span>
+                </div>
+                
+                <div className="empty-canvas-col empty-canvas-visual">
+                  <h3>Build Visually</h3>
+                  <button className="visual-plus-btn" onClick={addStarterNode} title="Add starting input node"><Plus size={24} /></button>
+                  <p>Add a blank start node, or load one of our optimized starter patterns below.</p>
+                  <div className="visual-templates-box">
+                    <button onClick={() => applyTemplate(workflowTemplates[1])}>💼 Use sub-agent template</button>
+                    <button onClick={() => setActiveView("templates")}>📂 Browse all templates</button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -1721,8 +2646,17 @@ Be helpful, professional, and explain what the generated workflow does.`;
               selected={node.id === selectedId}
               hoverPort={hoverPort}
               onPointerDown={(event) => beginNodeDrag(event, node)}
-              onSelect={() => setSelectedId(node.id)}
-              onBeginLink={(portId) => setLinkDraft({ sourceNode: node.id, sourcePort: portId })}
+              onSelect={() => {
+                if (canvasMode !== "hand") {
+                  setSelectedId(node.id);
+                  setSelectedLinkId(null);
+                }
+              }}
+              onBeginLink={(portId) => {
+                if (canvasMode !== "hand") {
+                  setLinkDraft({ sourceNode: node.id, sourcePort: portId });
+                }
+              }}
               onDelete={deleteNode}
               nodeState={nodeStates[node.id]}
               nodeOutput={nodeOutputs[node.id]}
@@ -1743,42 +2677,66 @@ Be helpful, professional, and explain what the generated workflow does.`;
             </button>
           </div>
 
-          <div style={{ display: "flex", gap: "4px", background: "var(--surface-soft)", padding: "4px", borderRadius: "8px", marginBottom: "14px" }}>
+          {/* Premium Segmented Control Tabs */}
+          <div className="chat-segmented-control">
             <button 
               onClick={() => setChatMode("tester")}
-              style={{ flex: 1, height: "30px", fontSize: "12px", borderRadius: "6px", fontWeight: "600", transition: "all 200ms ease", background: chatMode === "tester" ? "#ffffff" : "transparent", color: chatMode === "tester" ? "var(--blue)" : "var(--muted)", boxShadow: chatMode === "tester" ? "0 2px 8px rgba(0,0,0,0.06)" : "none" }}
+              className={`chat-segmented-tab ${chatMode === "tester" ? "active" : ""}`}
             >
               Agent Tester
             </button>
             <button 
               onClick={() => setChatMode("copilot")}
-              style={{ flex: 1, height: "30px", fontSize: "12px", borderRadius: "6px", fontWeight: "600", transition: "all 200ms ease", background: chatMode === "copilot" ? "#ffffff" : "transparent", color: chatMode === "copilot" ? "var(--blue)" : "var(--muted)", boxShadow: chatMode === "copilot" ? "0 2px 8px rgba(0,0,0,0.06)" : "none" }}
+              className={`chat-segmented-tab ${chatMode === "copilot" ? "active" : ""}`}
             >
               AI Copilot
             </button>
           </div>
 
-          <div className="chat-messages" style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", marginBottom: "14px", paddingRight: "4px" }}>
+          <div className="chat-messages" style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "14px", marginBottom: "14px", paddingRight: "4px" }}>
+            {chatMessages.length <= 1 && chatMode === "copilot" && (
+              <div className="empty-chat-welcome">
+                <Sparkles size={24} />
+                <h4>Welcome to AI Copilot</h4>
+                <p>Type a request below to build your canvas pipeline or select a quick starter pattern:</p>
+                <div className="empty-chat-pills">
+                  <button className="empty-chat-pill" onClick={() => sendCopilotInput("Build a pipeline that takes user input, passes it to a prompt instructions node, then an LLM model, and output.")}>🚀 Simple LLM Chain</button>
+                  <button className="empty-chat-pill" onClick={() => sendCopilotInput("Create a MongoDB Atlas search pipeline connected with OpenAI model.")}>🔍 RAG Search Flow</button>
+                  <button className="empty-chat-pill" onClick={() => sendCopilotInput("Build a news article retriever storing summarized data in a MongoDB collection.")}>📰 News Summarizer</button>
+                </div>
+              </div>
+            )}
+
             {chatMessages.map((msg) => {
               const isUser = msg.role === "user";
               const workflow = parseJsonWorkflow(msg.text);
 
               return (
-                <div key={msg.id} style={{ alignSelf: isUser ? "flex-end" : "flex-start", maxWidth: "85%", display: "flex", flexDirection: "column", gap: "4px" }}>
-                  <span style={{ fontSize: "10px", color: "var(--muted)", alignSelf: isUser ? "flex-end" : "flex-start", textTransform: "uppercase", fontWeight: "700", letterSpacing: "0.03em" }}>
-                    {isUser ? "You" : chatMode === "tester" ? "Workflow output" : "Flow assistant"}
-                  </span>
-                  <div style={{ background: isUser ? "var(--blue)" : "var(--surface-soft)", color: isUser ? "#ffffff" : "var(--text)", padding: "10px 14px", borderRadius: "12px", borderTopRightRadius: isUser ? "0" : "12px", borderTopLeftRadius: isUser ? "12px" : "0", fontSize: "13px", lineHeight: "1.5", whiteSpace: "pre-wrap", border: isUser ? "none" : "1px solid var(--border)" }}>
-                    {msg.text}
+                <div key={msg.id} style={{ alignSelf: isUser ? "flex-end" : "flex-start", maxWidth: "88%", display: "flex", flexDirection: "column", gap: "4px" }}>
+                  {isUser ? (
+                    <span className="chat-avatar-badge user" style={{ alignSelf: "flex-end" }}>
+                      <User size={10} /> You
+                    </span>
+                  ) : chatMode === "tester" ? (
+                    <span className="chat-avatar-badge tester">
+                      <Activity size={10} /> Runtime
+                    </span>
+                  ) : (
+                    <span className="chat-avatar-badge copilot">
+                      <Sparkles size={10} /> Copilot
+                    </span>
+                  )}
+                  <div 
+                    className={isUser ? "chat-bubble-user" : "chat-bubble-assistant"}
+                  >
+                    <FormattedMessage text={stripJsonBlocks(msg.text)} />
 
                     {workflow && (
                       <button 
                         className="primary"
-                        style={{ marginTop: "10px", width: "100%", height: "32px", fontSize: "11px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", background: "var(--blue)", color: "white", borderRadius: "6px" }}
+                        style={{ marginTop: "10px", width: "100%", height: "32px", fontSize: "11px", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px", background: "var(--blue)", color: "white", borderRadius: "6px", cursor: "pointer" }}
                         onClick={() => {
-                          setNodes(normalizeNodes(workflow.nodes));
-                          setLinks(filterDuplicateLinks(workflow.links));
-                          setStatus("Workflow imported from Copilot!");
+                          loadWorkflowIntoCanvas(workflow, "Workflow imported from Copilot!");
                         }}
                       >
                         <GitBranch size={13} /> Load Workflow into Canvas
@@ -1796,6 +2754,24 @@ Be helpful, professional, and explain what the generated workflow does.`;
             )}
           </div>
 
+          {/* Quick context action suggestions in active Copilot chat */}
+          {chatMode === "copilot" && chatMessages.length > 1 && (
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" }}>
+              <button 
+                onClick={() => setChatInput("Add a Data Store node to store results")}
+                style={{ fontSize: "11px", padding: "4px 8px", background: "#f8fafc", border: "1px solid var(--border)", borderRadius: "6px", cursor: "pointer", color: "var(--muted)" }}
+              >
+                💾 Add Data Store
+              </button>
+              <button 
+                onClick={() => setChatInput("Add a Code Transform node to format the output")}
+                style={{ fontSize: "11px", padding: "4px 8px", background: "#f8fafc", border: "1px solid var(--border)", borderRadius: "6px", cursor: "pointer", color: "var(--muted)" }}
+              >
+                ⚙️ Add Code Transform
+              </button>
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: "8px", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
             <textarea
               value={chatInput}
@@ -1812,7 +2788,7 @@ Be helpful, professional, and explain what the generated workflow does.`;
             />
             <button 
               className="primary" 
-              style={{ width: "44px", height: "44px", padding: "0", display: "grid", placeItems: "center", borderRadius: "8px" }}
+              style={{ width: "44px", height: "44px", padding: "0", display: "grid", placeItems: "center", borderRadius: "8px", cursor: "pointer" }}
               onClick={() => {
                 if (chatMode === "tester") sendChatInput(chatInput);
                 else sendCopilotInput(chatInput);
@@ -1830,31 +2806,196 @@ Be helpful, professional, and explain what the generated workflow does.`;
           <h2>{selectedLink ? "Connection" : selectedNode?.label || "Workspace"}</h2>
         </div>
 
-        {lastExecutionIssue && fixGuide && (
+        {lastExecutionIssue && (
           <div style={{ marginBottom: "16px", padding: "12px", border: "1px solid #fecaca", borderRadius: "12px", background: "#fff7f7" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", alignItems: "start", marginBottom: "10px" }}>
               <div>
-                <strong style={{ display: "block", fontSize: "13px" }}>{fixGuide.title}</strong>
+                <strong style={{ display: "block", fontSize: "13px" }}>{fixGuide ? fixGuide.title : "Execution Error"}</strong>
                 <span style={{ fontSize: "11px", color: "var(--muted)" }}>{lastExecutionIssue.label || "Workflow"}</span>
               </div>
-              <button
-                className="primary"
-                onClick={() => {
-                  setActiveView("settings");
-                  setSettingsFocus({ category: fixGuide.focus || "providers", ts: Date.now() });
-                }}
-                style={{ whiteSpace: "nowrap" }}
-              >
-                Quick Fix
-              </button>
+              {fixGuide && (
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setActiveView("settings");
+                    setSettingsFocus({ category: fixGuide.focus || "providers", ts: Date.now() });
+                  }}
+                  style={{ whiteSpace: "nowrap" }}
+                >
+                  Quick Fix
+                </button>
+              )}
             </div>
             <p style={{ margin: "0 0 8px", fontSize: "12px", lineHeight: "1.5", color: "var(--text)" }}>{lastExecutionIssue.message || "Run failed."}</p>
-            <ol style={{ margin: "0 0 0 18px", padding: 0, fontSize: "12px", lineHeight: "1.6", color: "var(--text)" }}>
-              {fixGuide.steps.map((step) => <li key={step}>{step}</li>)}
-            </ol>
-            <div style={{ marginTop: "10px", fontSize: "11px", color: "var(--muted)" }}>{fixGuide.action}</div>
+            {fixGuide && (
+              <>
+                <ol style={{ margin: "0 0 0 18px", padding: 0, fontSize: "12px", lineHeight: "1.6", color: "var(--text)" }}>
+                  {fixGuide.steps.map((step) => <li key={step}>{step}</li>)}
+                </ol>
+                {fixGuide.command && (
+                  <div style={{ marginTop: "10px", padding: "10px 12px", borderRadius: "10px", background: "#f8fafc", border: "1px solid var(--border)", fontSize: "12px", lineHeight: "1.5", color: "var(--text)" }}>
+                    <strong style={{ display: "block", marginBottom: "4px" }}>Command</strong>
+                    {fixGuide.command}
+                  </div>
+                )}
+                <div style={{ marginTop: "10px", fontSize: "11px", color: "var(--muted)" }}>{fixGuide.action}</div>
+              </>
+            )}
           </div>
         )}
+
+        <section className="workflow-health-panel">
+          <div className="panel-heading" style={{ marginBottom: "10px" }}>
+            <span>Diagnostics</span>
+            <h2>Workflow Health</h2>
+          </div>
+          <div className="workflow-health-score">
+            <strong>{workflowHealth.score}</strong>
+            <span>out of 100</span>
+          </div>
+          <p style={{ margin: "10px 0 12px", color: "var(--muted)", fontSize: "12px", lineHeight: "1.5" }}>
+            {workflowHealth.issues.length === 0
+              ? "No obvious blockers found. You are ready to run."
+              : `${workflowHealth.errors} error(s), ${workflowHealth.warnings} warning(s), ${workflowHealth.info} note(s) found.`}
+          </p>
+          <div className="workflow-health-list">
+            {workflowHealth.issues.slice(0, uiPreferences.simplifyEverything ? 3 : 5).map((issue, index) => (
+              <button
+                key={`${issue.title}-${index}`}
+                className={`workflow-health-item ${issue.severity}`}
+                onClick={() => {
+                  if (issue.focus === "settings") {
+                    const targetCategory = /database|vector|connection/i.test(`${issue.title} ${issue.message}`) ? "databases" : "providers";
+                    setActiveView("settings");
+                    setSettingsFocus({ category: targetCategory, ts: Date.now() });
+                    return;
+                  }
+                  if (issue.nodeId) {
+                    setSelectedId(issue.nodeId);
+                    setSelectedLinkId(null);
+                  }
+                }}
+              >
+                <span className={`workflow-health-pill ${issue.severity}`}>{issue.severity}</span>
+                <div>
+                  <strong>{issue.title}</strong>
+                  <p>{issue.message}</p>
+                </div>
+                <em>{issue.action}</em>
+              </button>
+            ))}
+            {workflowHealth.issues.length === 0 && (
+              <div className="workflow-health-clean">
+                <Check size={16} />
+                <span>Flow structure looks healthy.</span>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="replay-panel">
+          <div className="panel-heading" style={{ marginBottom: "10px" }}>
+            <span>Replay</span>
+            <h2>Last Run</h2>
+          </div>
+          {lastExecutionReplay ? (
+            <>
+              <p style={{ margin: "0 0 12px", color: "var(--muted)", fontSize: "12px", lineHeight: "1.5" }}>
+                {lastExecutionReplay.summary}
+              </p>
+              <div className="replay-list">
+                {lastExecutionReplay.events.slice(-10).map((event, index) => (
+                  <div className={`replay-item ${event.event?.replace(/[:]/g, "-") || "event"}`} key={`${event.event}-${event.node || index}-${index}`}>
+                    <strong>{event.event}</strong>
+                    <span>{event.label || event.node || "workflow"}</span>
+                    <p>{event.message || event.chunk || event.output || event.condition?.toString?.() || ""}</p>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p style={{ margin: 0, color: "var(--muted)", fontSize: "12px", lineHeight: "1.5" }}>
+              Run a workflow once to capture a step-by-step replay here.
+            </p>
+          )}
+        </section>
+
+        <section className="test-harness-panel">
+          <div className="panel-heading" style={{ marginBottom: "10px" }}>
+            <span>Testing</span>
+            <h2>Sample Cases</h2>
+          </div>
+          <p style={{ margin: "0 0 12px", color: "var(--muted)", fontSize: "12px", lineHeight: "1.5" }}>
+            Batch-check the current flow against a few sample inputs.
+          </p>
+          <div className="test-case-list">
+            {testCases.map((testCase, index) => (
+              <div className="test-case" key={testCase.id || index}>
+                <div className="test-case-row">
+                  <input
+                    value={testCase.name}
+                    onChange={(event) => {
+                      const next = [...testCases];
+                      next[index] = { ...next[index], name: event.target.value };
+                      setTestCases(next);
+                    }}
+                    placeholder="Test name"
+                  />
+                  <button
+                    className="danger-button"
+                    onClick={() => setTestCases((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                    title="Remove test case"
+                    style={{ height: "32px" }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+                <textarea
+                  value={testCase.input}
+                  onChange={(event) => {
+                    const next = [...testCases];
+                    next[index] = { ...next[index], input: event.target.value };
+                    setTestCases(next);
+                  }}
+                  placeholder="Sample input"
+                />
+                <input
+                  value={testCase.expected}
+                  onChange={(event) => {
+                    const next = [...testCases];
+                    next[index] = { ...next[index], expected: event.target.value };
+                    setTestCases(next);
+                  }}
+                  placeholder="Optional expected substring"
+                />
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+            <button
+              className="ghost"
+              onClick={() => setTestCases((current) => [...current, { id: `test-${Date.now()}`, name: `Case ${current.length + 1}`, input: "", expected: "" }])}
+              style={{ flex: 1 }}
+            >
+              <Plus size={14} /> Add case
+            </button>
+            <button className="primary" onClick={runTestHarness} disabled={testRunning} style={{ flex: 1 }}>
+              {testRunning ? "Running..." : "Run tests"}
+            </button>
+          </div>
+          {testResults.length > 0 && (
+            <div className="test-result-list">
+              {testResults.map((result) => (
+                <div className={`test-result ${result.passed ? "pass" : "fail"}`} key={result.id}>
+                  <strong>{result.name}</strong>
+                  <span>{result.passed ? "Pass" : "Fail"}</span>
+                  <p>{result.summary}</p>
+                  <pre>{result.output ? result.output.slice(0, 140) : result.error || "(no output)"}</pre>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
         
         {selectedLink && (
           <div className="connection-inspector">
@@ -1929,6 +3070,17 @@ Be helpful, professional, and explain what the generated workflow does.`;
                         💡 Recommendation: Use '{nodeModelCatalog.recommendation}'
                       </div>
                     )}
+                    <label style={{ marginTop: "12px" }}>Temperature ({selectedNode.data.temperature !== undefined ? selectedNode.data.temperature : 0.2})
+                      <input 
+                        type="range" 
+                        min="0.0" 
+                        max="1.0" 
+                        step="0.1" 
+                        value={selectedNode.data.temperature !== undefined ? selectedNode.data.temperature : 0.2} 
+                        onChange={(event) => updateSelectedData("temperature", parseFloat(event.target.value))} 
+                        style={{ width: "100%", accentColor: "var(--blue)", height: "6px", background: "var(--border)", outline: "none", cursor: "pointer" }}
+                      />
+                    </label>
                   </>
                 )}
               </>
@@ -2008,12 +3160,79 @@ Be helpful, professional, and explain what the generated workflow does.`;
 
                 <label>Collection<input value={selectedNode.data.collection || ""} onChange={(event) => updateSelectedData("collection", event.target.value)} /></label>
                 <label>Atlas Index<input value={selectedNode.data.index || ""} onChange={(event) => updateSelectedData("index", event.target.value)} /></label>
+                <label>Result Limit<input type="number" min="1" max="50" value={selectedNode.data.limit !== undefined ? selectedNode.data.limit : 4} onChange={(event) => updateSelectedData("limit", parseInt(event.target.value) || 4)} /></label>
+                <label>Search Field Path<input value={selectedNode.data.path !== undefined ? selectedNode.data.path : "embedding"} placeholder="e.g. embedding, vector" onChange={(event) => updateSelectedData("path", event.target.value)} /></label>
                 
                 {nodeDbInfo.suggested_setup && (
                   <div style={{ marginTop: "8px", padding: "10px", background: "#eff6ff", borderRadius: "6px", border: "1px solid #dbeafe", color: "var(--blue)", fontSize: "11px", lineHeight: "1.4" }}>
                     <strong>💡 Database Advice:</strong>
                     <p style={{ margin: "2px 0 0" }}>{nodeDbInfo.suggested_setup}</p>
                   </div>
+                )}
+              </>
+            )}
+
+            {selectedNode.type === "datastore" && (
+              <>
+                <label>Database Connection
+                  {runtime.databases?.length === 0 ? (
+                    <div style={{ marginTop: "4px", padding: "10px", background: "#fff1f2", border: "1px solid #ffe4e6", borderRadius: "8px", color: "var(--red)", fontSize: "12px", lineHeight: "1.4" }}>
+                      ⚠️ No databases configured!
+                      <button 
+                        onClick={() => setActiveView("settings")} 
+                        style={{ display: "block", marginTop: "8px", background: "var(--red)", color: "white", padding: "6px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "600", width: "100%", textAlign: "center" }}
+                      >
+                        Configure Databases in Settings
+                      </button>
+                    </div>
+                  ) : (
+                    <select value={selectedNode.data.vectorDatabase || selectedNode.data.database || ""} onChange={(event) => updateSelectedData("vectorDatabase", event.target.value)}>
+                      <option value="">Select a Database Connection</option>
+                      {runtime.databases?.map((db) => (
+                        <option key={db.id} value={db.id}>{db.name} ({db.kind})</option>
+                      ))}
+                    </select>
+                  )}
+                </label>
+                
+                <label>Operation
+                  <select value={selectedNode.data.operation || "save"} onChange={(event) => updateSelectedData("operation", event.target.value)}>
+                    <option value="save">Save Data (Insert/Write)</option>
+                    <option value="load">Load Data (Read/Query Latest)</option>
+                  </select>
+                </label>
+                
+                <label>Collection / Table<input value={selectedNode.data.collection || "data_store"} onChange={(event) => updateSelectedData("collection", event.target.value)} /></label>
+                <label>Payload Key / Field Key<input value={selectedNode.data.key || "text"} onChange={(event) => updateSelectedData("key", event.target.value)} /></label>
+              </>
+            )}
+
+            {selectedNode.type === "document_loader" && (
+              <>
+                <label>Source Type
+                  <select value={selectedNode.data.source_type || "url"} onChange={(event) => updateSelectedData("source_type", event.target.value)}>
+                    <option value="url">Fetch from URL (HTTP GET)</option>
+                    <option value="text">Static Document Text</option>
+                  </select>
+                </label>
+                
+                {selectedNode.data.source_type === "text" ? (
+                  <label>Static Document Content
+                    <textarea 
+                      style={{ fontSize: "12px", minHeight: "120px" }}
+                      value={selectedNode.data.text || ""} 
+                      onChange={(event) => updateSelectedData("text", event.target.value)} 
+                      placeholder="Enter raw text to load..."
+                    />
+                  </label>
+                ) : (
+                  <label>Document URL
+                    <input 
+                      value={selectedNode.data.url || ""} 
+                      onChange={(event) => updateSelectedData("url", event.target.value)} 
+                      placeholder="e.g. https://example.com/data.txt"
+                    />
+                  </label>
                 )}
               </>
             )}
@@ -2066,6 +3285,17 @@ Be helpful, professional, and explain what the generated workflow does.`;
                         💡 Recommendation: Use '{nodeModelCatalog.recommendation}'
                       </div>
                     )}
+                    <label style={{ marginTop: "12px" }}>Temperature ({selectedNode.data.temperature !== undefined ? selectedNode.data.temperature : 0.2})
+                      <input 
+                        type="range" 
+                        min="0.0" 
+                        max="1.0" 
+                        step="0.1" 
+                        value={selectedNode.data.temperature !== undefined ? selectedNode.data.temperature : 0.2} 
+                        onChange={(event) => updateSelectedData("temperature", parseFloat(event.target.value))} 
+                        style={{ width: "100%", accentColor: "var(--blue)", height: "6px", background: "var(--border)", outline: "none", cursor: "pointer" }}
+                      />
+                    </label>
                   </>
                 )}
               </>
@@ -2254,11 +3484,13 @@ Be helpful, professional, and explain what the generated workflow does.`;
                     <span style={{ color: "#b45309", background: "#fef3c7" }}>Branch: {nodeOutputs[selectedNode.id].routerResult ? "True" : "False"}</span>
                   )}
                 </div>
-                <div className="output-drawer-content">
-                  {nodeStates[selectedNode.id] === "completed" 
-                    ? (nodeOutputs[selectedNode.id]?.result || "(Empty Output)")
-                    : (nodeOutputs[selectedNode.id]?.error || "Unknown Error occurred during node execution.")
-                  }
+                <div className="output-drawer-content" style={{ maxHeight: "300px", overflowY: "auto", background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px", fontFamily: "inherit" }}>
+                  <FormattedMessage 
+                    text={nodeStates[selectedNode.id] === "completed" 
+                      ? formatExecutionResult(nodeOutputs[selectedNode.id]?.result)
+                      : (nodeOutputs[selectedNode.id]?.error || "Unknown Error occurred during node execution.")
+                    } 
+                  />
                 </div>
               </div>
             )}
@@ -2279,7 +3511,7 @@ Be helpful, professional, and explain what the generated workflow does.`;
             Pipeline Steps
           </span>
           <div className="timeline">
-            {graphNodes.map((node) => {
+            {sortedGraphNodes.map((node) => {
               const meta = nodeTypes.find((item) => item.type === node.type) || nodeTypes[0];
               const state = nodeStates[node.id];
               const output = nodeOutputs[node.id];
@@ -2307,19 +3539,21 @@ Be helpful, professional, and explain what the generated workflow does.`;
           </div>
         </div>
 
-        {compiledCode && (
+        {!uiPreferences.hideAdvancedPanels && compiledCode && (
           <div style={{ marginTop: "20px" }}>
             <span className="panel-heading" style={{ fontSize: "11px", fontWeight: "bold", textTransform: "uppercase", color: "var(--muted)", display: "block", marginBottom: "8px" }}>SDK Preview</span>
             <pre className="code-preview">{compiledCode.slice(0, 1200)}</pre>
           </div>
         )}
 
-        <details className="logs" style={{ marginTop: "16px", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
-          <summary style={{ fontSize: "11px", fontWeight: "bold", textTransform: "uppercase", color: "var(--muted)", cursor: "pointer", userSelect: "none" }}>Raw Execution Stream</summary>
-          <div style={{ marginTop: "8px", maxHeight: "150px", overflow: "auto" }}>
-            {executionLog.map((entry, index) => <p key={`${entry}-${index}`} style={{ margin: "4px 0", padding: "6px", background: "var(--surface-soft)", borderRadius: "4px", fontSize: "11px", fontFamily: "Geist Mono" }}>{entry}</p>)}
-          </div>
-        </details>
+        {!uiPreferences.hideAdvancedPanels && (
+          <details className="logs" style={{ marginTop: "16px", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
+            <summary style={{ fontSize: "11px", fontWeight: "bold", textTransform: "uppercase", color: "var(--muted)", cursor: "pointer", userSelect: "none" }}>Raw Execution Stream</summary>
+            <div style={{ marginTop: "8px", maxHeight: "150px", overflow: "auto" }}>
+              {executionLog.map((entry, index) => <p key={`${entry}-${index}`} style={{ margin: "4px 0", padding: "6px", background: "var(--surface-soft)", borderRadius: "4px", fontSize: "11px", fontFamily: "Geist Mono" }}>{entry}</p>)}
+            </div>
+          </details>
+        )}
       </aside>
       </>
       ) : (
@@ -2330,6 +3564,9 @@ Be helpful, professional, and explain what the generated workflow does.`;
           logs={executionLog}
           runtime={runtime}
           setRuntime={setRuntime}
+          uiPreferences={uiPreferences}
+          setUiPreferences={setUiPreferences}
+          applySimplifyPreset={applySimplifyPreset}
           onSaveRuntime={saveRuntimeNow}
           onResetRuntime={resetRuntime}
           runtimeSaveStatus={runtimeSaveStatus}
@@ -2346,11 +3583,12 @@ Be helpful, professional, and explain what the generated workflow does.`;
   );
 }
 
-function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onSaveRuntime, onResetRuntime, runtimeSaveStatus, settingsFocus, onOpenIde, onCreateNewAgent, onApplyTemplate, savedFlows, loadGraphById, deleteGraphById }) {
+function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, uiPreferences, setUiPreferences, applySimplifyPreset, onSaveRuntime, onResetRuntime, runtimeSaveStatus, settingsFocus, onOpenIde, onCreateNewAgent, onApplyTemplate, savedFlows, loadGraphById, deleteGraphById }) {
   const [selectedItem, setSelectedItem] = useState({ category: "providers", id: "openai" });
   const [modelCatalog, setModelCatalog] = useState({ models: [], recommendation: "" });
   const [loadingModels, setLoadingModels] = useState(false);
   const [dbInfo, setDbInfo] = useState({ suggested_setup: "" });
+  const [showExperiencePopup, setShowExperiencePopup] = useState(false);
 
   useEffect(() => {
     if (!settingsFocus?.category) return;
@@ -2478,10 +3716,10 @@ function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onSave
           <button className="primary" onClick={onCreateNewAgent}><Plus size={15} /> Create new agent</button>
         </div>
         
-        {savedFlows && savedFlows.length > 0 && (
-          <div style={{ marginBottom: "32px" }}>
+        {savedFlows && savedFlows.length > 0 ? (
+          <div>
             <h3 style={{ fontSize: "12px", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "14px", fontWeight: 700 }}>Saved Workflows</h3>
-            <div className="flow-grid" style={{ marginBottom: "20px" }}>
+            <div className="flow-grid">
               {savedFlows.map((flow) => (
                 <article className="flow-card" key={flow.id}>
                   <div><Bot size={18} /><strong>{flow.name}</strong></div>
@@ -2494,20 +3732,16 @@ function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onSave
               ))}
             </div>
           </div>
-        )}
-
-        <div>
-          <h3 style={{ fontSize: "12px", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "14px", fontWeight: 700 }}>Available Templates</h3>
-          <div className="flow-grid">
-            {workflowTemplates.map((template) => (
-              <article className="flow-card" key={template.name}>
-                <div><FileText size={18} /><strong>{template.name}</strong></div>
-                <p>{template.description}</p>
-                <button onClick={() => onApplyTemplate(template)}>Use template</button>
-              </article>
-            ))}
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textalign: "center", padding: "64px 32px", border: "2px dashed var(--border)", borderRadius: "12px", background: "var(--surface)", minHeight: "280px" }}>
+            <Bot size={36} style={{ color: "var(--border)", marginBottom: "12px" }} />
+            <h3 style={{ margin: "0 0 6px 0", fontSize: "16px", fontWeight: "650" }}>No Workflows Saved</h3>
+            <p style={{ margin: "0 0 16px 0", color: "var(--muted)", fontSize: "13px", maxWidth: "320px", lineHeight: "1.5" }}>Create a new agent from scratch, or choose one of our starter patterns in the Templates tab.</p>
+            <button className="primary" onClick={onCreateNewAgent} style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <Plus size={15} /> Create your first agent
+            </button>
           </div>
-        </div>
+        )}
       </main>
     );
   }
@@ -2560,6 +3794,19 @@ function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onSave
         <div><span>Settings</span><h1>BYO Runtime</h1></div>
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
           <span style={{ fontSize: "11px", color: "var(--muted)" }}>{runtimeSaveStatus}</span>
+          <button 
+            className="ghost" 
+            onClick={() => setShowExperiencePopup(true)} 
+            style={{ 
+              display: "inline-flex", 
+              alignItems: "center", 
+              gap: "6px", 
+              color: "var(--blue)", 
+              borderColor: "color-mix(in srgb, var(--blue) 25%, var(--border))" 
+            }}
+          >
+            <Sliders size={15} /> Experience Options
+          </button>
           <button className="ghost" onClick={onSaveRuntime}><Save size={15} /> Save</button>
           <button className="ghost" onClick={onResetRuntime}>Reset</button>
           <button className="ghost" onClick={onOpenIde}><Bot size={15} /> Back to IDE</button>
@@ -2985,15 +4232,135 @@ function WorkspaceScreen({ view, nodes, links, logs, runtime, setRuntime, onSave
             </div>
           )}
 
-          <div className="settings-panel notes-panel">
-            <div className="panel-heading"><span>Assistant</span><h2>Implementation Notes</h2></div>
-            <div className="note-list">
-              <p><FileText size={16} /> Configurations are stored locally in the frontend state. Secrets like API Keys are transmitted securely during execution requests.</p>
-              <p><Database size={16} /> Dynamic vector nodes and model references in your flow workspace will automatically adapt to configurations added here.</p>
+          {!uiPreferences.hideAdvancedPanels && (
+            <div className="settings-panel notes-panel">
+              <div className="panel-heading"><span>Assistant</span><h2>Implementation Notes</h2></div>
+              <div className="note-list">
+                <p><FileText size={16} /> Configurations are stored locally in the frontend state. Secrets like API Keys are transmitted securely during execution requests.</p>
+                <p><Database size={16} /> Dynamic vector nodes and model references in your flow workspace will automatically adapt to configurations added here.</p>
+              </div>
             </div>
-          </div>
+          )}
         </section>
       </div>
+
+      {showExperiencePopup && (
+        <div 
+          className="experience-popup-overlay"
+          onClick={() => setShowExperiencePopup(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
+            display: "grid",
+            placeItems: "center",
+            zIndex: 9999
+          }}
+        >
+          <div 
+            className="experience-popup-content"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(560px, 92vw)",
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: "20px",
+              boxShadow: "0 24px 80px rgba(15, 23, 42, 0.22)",
+              padding: "24px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "20px"
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border)", paddingBottom: "14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <Sliders size={18} style={{ color: "var(--blue)" }} />
+                <h2 style={{ margin: 0, fontSize: "16px", fontWeight: "600" }}>Focus & Experience Options</h2>
+              </div>
+              <button 
+                onClick={() => setShowExperiencePopup(false)}
+                style={{ color: "var(--muted)", padding: "6px", borderRadius: "50%", background: "var(--surface-soft)", display: "grid", placeItems: "center" }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="experience-grid" style={{ display: "grid", gridTemplateColumns: "1fr", gap: "10px" }}>
+              <label className="toggle-card">
+                <input
+                  type="checkbox"
+                  checked={uiPreferences.simplifyEverything}
+                  onChange={(event) => applySimplifyPreset(event.target.checked)}
+                />
+                <div>
+                  <strong>Simplify everything</strong>
+                  <span>Turns on a cleaner layout, calmer motion, and less visual noise.</span>
+                </div>
+              </label>
+              <label className="toggle-card">
+                <input
+                  type="checkbox"
+                  checked={uiPreferences.readableText}
+                  onChange={(event) => setUiPreferences((current) => ({ ...current, readableText: event.target.checked }))}
+                />
+                <div>
+                  <strong>Readable text</strong>
+                  <span>Gives the UI more breathing room for longer reading sessions.</span>
+                </div>
+              </label>
+              <label className="toggle-card">
+                <input
+                  type="checkbox"
+                  checked={uiPreferences.compactLayout}
+                  onChange={(event) => setUiPreferences((current) => ({ ...current, compactLayout: event.target.checked }))}
+                />
+                <div>
+                  <strong>Compact layout</strong>
+                  <span>Tightens spacing so the important bits stay in view.</span>
+                </div>
+              </label>
+              <label className="toggle-card">
+                <input
+                  type="checkbox"
+                  checked={uiPreferences.reduceMotion}
+                  onChange={(event) => setUiPreferences((current) => ({ ...current, reduceMotion: event.target.checked }))}
+                />
+                <div>
+                  <strong>Reduce motion</strong>
+                  <span>Softens animations for a steadier, less distracting feel.</span>
+                </div>
+              </label>
+              <label className="toggle-card">
+                <input
+                  type="checkbox"
+                  checked={uiPreferences.hideAdvancedPanels}
+                  onChange={(event) => setUiPreferences((current) => ({ ...current, hideAdvancedPanels: event.target.checked }))}
+                />
+                <div>
+                  <strong>Hide advanced panels</strong>
+                  <span>Hides the raw stream, SDK preview, and other deep-dive sections.</span>
+                </div>
+              </label>
+            </div>
+
+            <div style={{ padding: "12px 14px", borderRadius: "12px", border: "1px solid var(--border)", background: "#f8fafc", fontSize: "12px", lineHeight: "1.6", color: "var(--muted)" }}>
+              Your workspace is attached to browser storage, so the current graph, layout, and settings come back after refresh without requiring a login.
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "4px" }}>
+              <button 
+                className="primary" 
+                onClick={() => setShowExperiencePopup(false)}
+                style={{ height: "36px", padding: "0 18px", borderRadius: "8px" }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
   }
