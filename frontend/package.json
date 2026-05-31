@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --configLoader native",
-    "build": "node node_modules/vite/bin/vite.js build --configLoader native",
-    "preview": "node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --configLoader native"
+    "dev": "vite --host 127.0.0.1 --port 5173 --configLoader native",
+    "build": "vite build --configLoader native",
+    "preview": "vite preview --host 127.0.0.1 --port 5173 --configLoader native"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",
