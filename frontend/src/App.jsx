@@ -1111,6 +1111,7 @@ export function App() {
   }
 
   const workspaceUser = sessionUser?.username || "workspace";
+  const viewForUi = sessionUser?.username ? activeView : "home";
 
   useEffect(() => {
     writeStoredJson(storageKey("workspace", workspaceUser), {
@@ -1202,6 +1203,7 @@ export function App() {
 
   function logout() {
     setSessionUser(null);
+    setActiveView("home");
     try {
       localStorage.removeItem(storageKey("session"));
     } catch {}
@@ -2348,10 +2350,6 @@ Be helpful, professional, and keep the output focused on the JSON structure only
     </div>
   );
 
-  if (!sessionUser?.username && activeView !== "home") {
-    return authScreen;
-  }
-
   const formatExecutionResult = (result) => {
     if (!result) return "(Empty Output)";
     try {
@@ -2420,7 +2418,7 @@ Be helpful, professional, and keep the output focused on the JSON structure only
             {navItems.map((item) => (
               <button 
                 key={item.id} 
-                className={activeView === item.id ? "active" : ""} 
+                className={viewForUi === item.id ? "active" : ""} 
                 onClick={() => { setActiveView(item.id); if (item.id === "flows") fetchFlows(); }}
               >
                 {item.label}
@@ -2429,7 +2427,7 @@ Be helpful, professional, and keep the output focused on the JSON structure only
           </nav>
         </div>
         <div className="top-actions">
-          {activeView === "home" ? (
+          {viewForUi === "home" ? (
             <button className="primary" onClick={() => setActiveView("ide")}>
               <CirclePlay size={15} /> Launch Studio
             </button>
@@ -2449,7 +2447,7 @@ Be helpful, professional, and keep the output focused on the JSON structure only
 
 
 
-      {activeView === "ide" ? (
+      {viewForUi === "ide" ? (
       <>
       <section className="palette">
         <div className="panel-heading">
@@ -3567,7 +3565,7 @@ Be helpful, professional, and keep the output focused on the JSON structure only
         )}
       </aside>
       </>
-      ) : activeView === "home" ? (
+      ) : viewForUi === "home" ? (
         <Home 
           onLaunchIde={() => setActiveView("ide")}
           onOpenTemplates={() => setActiveView("templates")}
