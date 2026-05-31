@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from bson import ObjectId
@@ -31,7 +31,7 @@ def _safe_id(graph_id: str) -> ObjectId | str:
 
 async def save_graph(graph: GraphDocument) -> str:
     payload = graph.model_dump(exclude={"id"})
-    payload["updatedAt"] = datetime.now(UTC)
+    payload["updatedAt"] = datetime.now(timezone.utc)
     db = get_database()
     if db is None:
         graph_id = graph.id or str(len(_memory_graphs) + 1)
